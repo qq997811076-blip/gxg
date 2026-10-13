@@ -195,19 +195,38 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Android API, retained for broad compatibility")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != 701 || resultCode != Activity.RESULT_OK) return
-        val uri = data?.data ?: return
+        if (requestCode != 701) return
+        if (resultCode != Activity.RESULT_OK) {
+            Toast.makeText(this, "未选择文件或文件选择已取消", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val uri = data?.data
+        if (uri == null) {
+            Toast.makeText(this, "文件选择器没有返回文件地址，请重新选择", Toast.LENGTH_LONG).show()
+            return
+        }
         try {
-            val content = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: ""
+            // 兼容 Android 文档选择器返回的 content:// URI，并在读取期间保留可见反馈。
+            Toast.makeText(this, "正在读取所选文件…", Toast.LENGTH_SHORT).show()
+            val content = contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                ?: throw java.io.IOException("无法打开所选文件")
             val name = queryName(uri).lowercase(Locale.ROOT)
             val isCsv = name.endsWith(".csv") || content.lineSequence().firstOrNull()?.contains(",") == true
             val parsed = parseImported(content, isCsv)
             importedIPs = parsed.first
             prefs.edit().putString("imported_ips", importedIPs.joinToString("\n")).apply()
+            if (!::sourceStats.isInitialized) {
+                showSources()
+            }
             sourceStats.text = "有效唯一 IPv4：${parsed.first.size}；重复数量：${parsed.second}"
-            Toast.makeText(this, "导入完成", Toast.LENGTH_SHORT).show()
+            val message = if (parsed.first.isEmpty()) {
+                "文件已读取，但没有识别到有效 IPv4；请确认 CSV 内容包含 IPv4 地址"
+            } else {
+                "导入完成：${parsed.first.size} 个唯一 IPv4，重复 ${parsed.second} 个"
+            }
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
-            Toast.makeText(this, "读取文件失败：${e.message}", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "读取文件失败：${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
         }
     }
 
