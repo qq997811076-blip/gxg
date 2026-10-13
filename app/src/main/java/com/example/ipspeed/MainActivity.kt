@@ -27,6 +27,13 @@ class MainActivity : Activity() {
     private var importedIPs: List<String> = emptyList()
     private var resultLines: List<String> = emptyList()
     private var sourcePage = false
+    private var geoRowsByIP: Map<String, String> = emptyMap()
+    private var countryCodesByIP: Map<String, String> = emptyMap()
+
+    private data class GeoMetadata(
+        val rows: Map<String, String>,
+        val countries: Map<String, String>
+    )
 
     private lateinit var root: LinearLayout
     private lateinit var status: TextView
@@ -50,6 +57,8 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         importedIPs = prefs.getString("imported_ips", "")!!
             .lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.distinct().toList()
+        geoRowsByIP = readStringMap(prefs.getString("ip_geo_rows", "{}"))
+        countryCodesByIP = readStringMap(prefs.getString("ip_country_codes", "{}"))
         showMain()
     }
 
@@ -190,7 +199,7 @@ class MainActivity : Activity() {
         sourcePage = true
         makeRoot()
         root.addView(label("IP 来源管理", 24f))
-        root.addView(label("TXT：忽略行首空白，只保留每行开头的 IPv4；尾部内容忽略。CSV：从字段中提取 IPv4。IPv6 不支持。", 14f))
+        root.addView(label("TXT：忽略行首空白，只保留行首 IPv4；CSV：从字段中提取 IPv4。保留同一行的地理信息用于结果显示；IPv6 不支持。", 14f))
         root.addView(button("选择 TXT / CSV 文件") {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
@@ -205,7 +214,10 @@ class MainActivity : Activity() {
         root.addView(sourceStats)
         root.addView(button("清除已导入的本地 IP") {
             importedIPs = emptyList()
+            geoRowsByIP = emptyMap()
+            countryCodesByIP = emptyMap()
             prefs.edit().putString("imported_ips", "").apply()
+            saveGeoMetadata()
             sourceStats.text = "有效唯一 IPv4：0；重复数量：0"
             Toast.makeText(this, "已清除", Toast.LENGTH_SHORT).show()
         })
@@ -265,12 +277,16 @@ class MainActivity : Activity() {
             val name = queryName(uri).lowercase(Locale.ROOT)
             val isCsv = name.endsWith(".csv") || content.lineSequence().firstOrNull()?.contains(",") == true
             val parsed = parseImported(content, isCsv)
+            val geo = parseGeoMetadata(content, isCsv)
             importedIPs = parsed.first
-            // 保存去重后的列表，并自动启用本地来源，避免测速时忽略刚导入的文件。
+            geoRowsByIP = geo.rows.filterKeys { importedIPs.contains(it) }
+            countryCodesByIP = geo.countries.filterKeys { importedIPs.contains(it) }
+            // 保存去重后的 IP 与对应原始地理记录，重启后仍可恢复国家/地区/城市等信息。
             prefs.edit()
                 .putString("imported_ips", importedIPs.joinToString("\n"))
                 .putBoolean("localEnabled", importedIPs.isNotEmpty())
                 .apply()
+            saveGeoMetadata()
             if (!::sourceStats.isInitialized) {
                 showSources()
             }
@@ -304,6 +320,167 @@ class MainActivity : Activity() {
         val nums = parts.map { it.toIntOrNull() ?: return null }
         if (nums.any { it !in 0..255 }) return null
         return nums.joinToString(".")
+    }
+
+    private fun readStringMap(raw: String?): Map<String, String> {
+        return try {
+            val json = org.json.JSONObject(raw ?: "{}")
+            val result = linkedMapOf<String, String>()
+            val keys = json.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val value = json.optString(key, "")
+                if (value.isNotEmpty()) result[key] = value
+            }
+            result
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun saveGeoMetadata() {
+        try {
+            val rowsJson = org.json.JSONObject()
+            geoRowsByIP.forEach { (ip, row) -> rowsJson.put(ip, row) }
+            val countriesJson = org.json.JSONObject()
+            countryCodesByIP.forEach { (ip, code) -> countriesJson.put(ip, code) }
+            prefs.edit()
+                .putString("ip_geo_rows", rowsJson.toString())
+                .putString("ip_country_codes", countriesJson.toString())
+                .apply()
+        } catch (e: Exception) {
+            Toast.makeText(this, "地理信息保存失败：${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun splitCsvFields(line: String): List<String> {
+        val fields = mutableListOf<String>()
+        val field = StringBuilder()
+        var quoted = false
+        var i = 0
+        while (i < line.length) {
+            val c = line[i]
+            when {
+                c == '"' && quoted && i + 1 < line.length && line[i + 1] == '"' -> {
+                    field.append('"')
+                    i++
+                }
+                c == '"' -> quoted = !quoted
+                c == ',' && !quoted -> {
+                    fields.add(field.toString().trim())
+                    field.setLength(0)
+                }
+                else -> field.append(c)
+            }
+            i++
+        }
+        fields.add(field.toString().trim())
+        return fields
+    }
+
+    private fun normalizeCountryCode(value: String?): String? {
+        val code = value?.trim()?.uppercase(Locale.ROOT) ?: return null
+        return code.takeIf { Regex("^[A-Z]{2}$").matches(it) }
+    }
+
+    private fun countryCodeFromLine(line: String, csv: Boolean, countryIndex: Int?): String? {
+        if (csv && countryIndex != null) {
+            val fields = splitCsvFields(line)
+            if (countryIndex in fields.indices) {
+                normalizeCountryCode(fields[countryIndex])?.let { return it }
+            }
+        }
+
+        val labelled = Regex(
+            "(?i)(?:country(?:[_ -]?code)?|countrycode|country_iso2|iso[_ -]?(?:alpha2|2))\\s*[:=]\\s*([A-Z]{2})"
+        ).find(line)?.groupValues?.get(1)
+        normalizeCountryCode(labelled)?.let { return it }
+
+        // 无表头 CSV 按“IP、国家代码、地区代码、城市代码、城市名称……”读取；
+        // 若 IP 后先出现数字端口，则继续检查端口后的字段。
+        if (csv) {
+            val fields = splitCsvFields(line)
+            val ipFieldIndex = fields.indexOfFirst {
+                Regex("^[0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?::[0-9]{1,5})?$").matches(it.trim())
+            }
+            if (ipFieldIndex >= 0) {
+                val nextField = fields.getOrNull(ipFieldIndex + 1)
+                normalizeCountryCode(nextField)?.let { return it }
+                if (nextField?.trim()?.matches(Regex("^[0-9]{1,5}$")) == true) {
+                    normalizeCountryCode(fields.getOrNull(ipFieldIndex + 2))?.let { return it }
+                }
+            }
+        }
+
+        // 支持常见的 IP:端口#国家代码 以及 IP#国家代码#地区/城市信息格式。
+        if ('#' in line) {
+            val suffix = line.substringAfter('#')
+                .substringBefore('#')
+                .substringBefore(',')
+                .substringBefore('|')
+                .substringBefore(';')
+                .trim()
+            normalizeCountryCode(suffix)?.let { return it }
+        }
+        return null
+    }
+
+    private fun parseGeoMetadata(content: String, csv: Boolean): GeoMetadata {
+        val lines = content.lineSequence().toList()
+        val headers = if (csv) lines.firstOrNull()?.let { splitCsvFields(it) } else null
+        val countryAliases = setOf(
+            "country", "country_code", "countrycode", "country_iso", "country_iso2",
+            "country_iso_code", "iso2", "iso_2", "iso_alpha2", "iso-alpha2", "cc"
+        )
+        val countryIndex = headers?.indexOfFirst {
+            it.trim().trim('"').lowercase(Locale.ROOT).replace(' ', '_') in countryAliases
+        }?.takeIf { it >= 0 }
+        val rows = linkedMapOf<String, String>()
+        val countries = linkedMapOf<String, String>()
+        val ipRegex = Regex("[0-9]{1,3}(?:\\.[0-9]{1,3}){3}")
+
+        for ((lineIndex, line) in lines.withIndex()) {
+            val ips = if (csv) {
+                ipRegex.findAll(line).mapNotNull { validIPv4(it.value) }.toList()
+            } else {
+                val trimmed = line.trimStart()
+                val match = Regex("^([0-9]{1,3}(?:\\.[0-9]{1,3}){3})").find(trimmed)
+                if (match == null) emptyList() else listOfNotNull(validIPv4(match.groupValues[1]))
+            }
+            if (ips.isEmpty()) continue
+            val country = countryCodeFromLine(
+                line,
+                csv,
+                if (lineIndex == 0 && countryIndex != null) null else countryIndex
+            )
+            for (ip in ips) {
+                if (!rows.containsKey(ip) ||
+                    (countries[ip].isNullOrBlank() && !country.isNullOrBlank())) {
+                    rows[ip] = line
+                }
+                if (countries[ip].isNullOrBlank() && !country.isNullOrBlank()) {
+                    countries[ip] = country
+                }
+            }
+        }
+        return GeoMetadata(rows, countries)
+    }
+
+    private fun mergeGeoMetadata(
+        targetRows: MutableMap<String, String>,
+        targetCountries: MutableMap<String, String>,
+        incoming: GeoMetadata
+    ) {
+        for ((ip, row) in incoming.rows) {
+            val newCountry = incoming.countries[ip]
+            if (!targetRows.containsKey(ip) ||
+                (targetCountries[ip].isNullOrBlank() && !newCountry.isNullOrBlank())) {
+                targetRows[ip] = row
+            }
+            if (targetCountries[ip].isNullOrBlank() && !newCountry.isNullOrBlank()) {
+                targetCountries[ip] = newCountry
+            }
+        }
     }
 
     private fun parseImported(content: String, csv: Boolean): Pair<List<String>, Int> {
@@ -388,14 +565,22 @@ class MainActivity : Activity() {
         resultsView.text = "正在准备测速…"
         status.text = "状态：正在启动"
         process = null
+        val savedGeoRows = geoRowsByIP.toMap()
+        val savedCountryCodes = countryCodesByIP.toMap()
         executor.execute {
             val sourceLog = StringBuilder()
+            val runGeoRows = linkedMapOf<String, String>()
+            val runCountryCodes = linkedMapOf<String, String>()
             try {
                 // 再次规范化本地保存内容，防止旧版本保存的重复/非规范 IP 混入测速。
                 val mergedIPs = linkedSetOf<String>()
                 if (localEnabled) {
                     val localUnique = parseImported(importedIPs.joinToString("\n"), false).first
                     mergedIPs.addAll(localUnique)
+                    for (ip in localUnique) {
+                        savedGeoRows[ip]?.let { runGeoRows[ip] = it }
+                        savedCountryCodes[ip]?.let { runCountryCodes[ip] = it }
+                    }
                     sourceLog.append("本地来源：原保存 ${importedIPs.size} 条；重新去重后加入 ${localUnique.size} 个唯一 IPv4\n")
                 } else {
                     sourceLog.append("本地来源：未启用\n")
@@ -420,6 +605,8 @@ class MainActivity : Activity() {
                             if (code !in 200..299) throw java.io.IOException("HTTP 状态码：$code")
                             val content = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
                             val found = parseImported(content, false).first
+                            val geo = parseGeoMetadata(content, false)
+                            mergeGeoMetadata(runGeoRows, runCountryCodes, geo)
                             val before = mergedIPs.size
                             mergedIPs.addAll(found)
                             sourceLog.append("该来源识别到 ${found.size} 个唯一 IPv4；新增 ${mergedIPs.size - before} 个\n")
@@ -464,10 +651,15 @@ class MainActivity : Activity() {
                     }
                 }
                 val exitCode = p.waitFor()
-                val parsed = all.toString().lineSequence()
+                val parsedRaw = all.toString().lineSequence()
                     .map { it.trim() }
                     .filter { Regex("^[0-9]{1,3}(?:\\.[0-9]{1,3}){3}#[0-9]+(?:\\.[0-9]+)?M$").matches(it) }
                     .toList()
+                val parsed = parsedRaw.map { line ->
+                    val ip = line.substringBefore("#")
+                    val country = runCountryCodes[ip]
+                    if (country.isNullOrBlank()) line else "$line $country"
+                }
                 resultLines = parsed
                 val outputText = sourceLog.toString() + all.toString().trim()
                 runOnUiThread {
@@ -502,7 +694,7 @@ class MainActivity : Activity() {
 
     private fun filterResults(lines: List<String>, threshold: Double): List<String> =
         lines.filter { line ->
-            val speed = line.substringAfter("#").removeSuffix("M").toDoubleOrNull() ?: 0.0
+            val speed = line.substringAfter("#").substringBefore("M").toDoubleOrNull() ?: 0.0
             speed >= threshold
         }
 
