@@ -126,6 +126,18 @@ class MainActivity : Activity() {
         resultsView.setPadding(dp(10), dp(10), dp(10), dp(10))
         resultsView.setBackgroundColor(0xFFEFEFEF.toInt())
         root.addView(resultsView, LinearLayout.LayoutParams(-1, dp(280)))
+        thresholdInput.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                val threshold = s?.toString()?.toDoubleOrNull() ?: return
+                if (threshold >= 0.5 && resultLines.isNotEmpty()) {
+                    val visible = filterResults(resultLines, threshold)
+                    resultsView.text = if (visible.isEmpty()) "没有达到显示标准的结果" else visible.joinToString("\\n\\n")
+                    status.text = "状态：结果筛选中；显示 ${visible.size} 条"
+                }
+            }
+            override fun afterTextChanged(s: android.text.Editable?) {}
+        })
     }
 
     private fun showSources() {
