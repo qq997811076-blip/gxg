@@ -15,6 +15,8 @@ import android.widget.TextView
 import android.widget.Toast
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Locale
 import java.util.concurrent.Executors
 
@@ -285,35 +287,85 @@ class MainActivity : Activity() {
             Toast.makeText(this, "请至少启用一个 IP 来源", Toast.LENGTH_LONG).show()
             return
         }
-        if (localEnabled && importedIPs.isEmpty()) {
-            Toast.makeText(this, "本地来源已启用，但还没有导入 IP 文件", Toast.LENGTH_LONG).show()
+        if (localEnabled && importedIPs.isEmpty() && !networkEnabled) {
+            Toast.makeText(this, "本地来源已启用，但还没有导入 IP 文件；请启用网络来源或导入文件", Toast.LENGTH_LONG).show()
             return
         }
 
         val binary = File(filesDir, "sss")
+        val ipFile = File(filesDir, "ips.txt")
         try {
             if (!binary.exists()) assets.open("sss").use { input ->
                 FileOutputStream(binary).use { output -> input.copyTo(output) }
             }
             binary.setExecutable(true, true)
-            val ipFile = File(filesDir, "ips.txt")
-            if (localEnabled) ipFile.writeText(importedIPs.joinToString("\n"))
-            else ipFile.delete()
         } catch (e: Exception) {
             Toast.makeText(this, "准备测速文件失败：${e.message}", Toast.LENGTH_LONG).show()
             return
         }
 
+        // Android 原生网络栈读取 IP 来源，避免 Go 纯 Go DNS 解析器误用 ::1:53。
         val args = mutableListOf(
             binary.absolutePath, target, connectN.toString(), downloadN.toString(), topN.toString(), "no"
         )
-        if (networkEnabled) args.addAll(urls)
         resultLines = emptyList()
         resultsView.text = "正在准备测速…"
         status.text = "状态：正在启动"
         process = null
         executor.execute {
+            val sourceLog = StringBuilder()
             try {
+                val mergedIPs = linkedSetOf<String>()
+                if (localEnabled) {
+                    mergedIPs.addAll(importedIPs)
+                    sourceLog.append("本地来源：加入 ${importedIPs.size} 个唯一 IPv4\n")
+                } else {
+                    sourceLog.append("本地来源：未启用\n")
+                }
+
+                if (networkEnabled) {
+                    for (sourceURL in urls) {
+                        sourceLog.append("正在读取：${sourceURL}\n")
+                        runOnUiThread {
+                            status.text = "状态：正在读取 IP 来源"
+                            resultsView.text = sourceLog.toString()
+                        }
+                        var connection: HttpURLConnection? = null
+                        try {
+                            connection = (URL(sourceURL).openConnection() as HttpURLConnection).apply {
+                                connectTimeout = 15000
+                                readTimeout = 60000
+                                instanceFollowRedirects = true
+                                setRequestProperty("User-Agent", "Mozilla/5.0")
+                            }
+                            val code = connection.responseCode
+                            if (code !in 200..299) throw java.io.IOException("HTTP 状态码：$code")
+                            val content = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                            val found = parseImported(content, false).first
+                            val before = mergedIPs.size
+                            mergedIPs.addAll(found)
+                            sourceLog.append("该来源识别到 ${found.size} 个唯一 IPv4；新增 ${mergedIPs.size - before} 个\n")
+                        } catch (e: Exception) {
+                            sourceLog.append("读取失败，跳过此来源：${e.message ?: e.javaClass.simpleName}\n")
+                        } finally {
+                            connection?.disconnect()
+                        }
+                    }
+                } else {
+                    sourceLog.append("网络来源：未启用\n")
+                }
+
+                if (mergedIPs.isEmpty()) {
+                    runOnUiThread {
+                        process = null
+                        resultsView.text = sourceLog.toString() + "读取 IP 来源失败：所有来源均未取得有效 IPv4"
+                        status.text = "状态：IP 来源读取失败"
+                    }
+                    return@execute
+                }
+
+                ipFile.writeText(mergedIPs.joinToString("\n") + "\n")
+                sourceLog.append("全部来源合并去重后：${mergedIPs.size} 个唯一 IPv4\n\n")
                 val p = ProcessBuilder(args).directory(filesDir).redirectErrorStream(true).start()
                 process = p
                 runOnUiThread { status.text = "状态：测速进行中" }
@@ -332,7 +384,7 @@ class MainActivity : Activity() {
                     .filter { Regex("^[0-9]{1,3}(?:\\.[0-9]{1,3}){3}#[0-9]+(?:\\.[0-9]+)?M$").matches(it) }
                     .toList()
                 resultLines = parsed
-                val outputText = all.toString().trim()
+                val outputText = sourceLog.toString() + all.toString().trim()
                 runOnUiThread {
                     process = null
                     val visible = filterResults(parsed, threshold)
