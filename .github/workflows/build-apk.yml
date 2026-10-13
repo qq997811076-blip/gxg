@@ -1,6 +1,9 @@
 name: Build APK
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -27,7 +30,7 @@ jobs:
         with:
           go-version: '1.23.x'
 
-      - name: Compile Go source for Android ARM64 without formatting it
+      - name: Compile Go source for Android ARM64 without modifying source
         shell: bash
         run: |
           set -euo pipefail
@@ -48,10 +51,21 @@ jobs:
       - name: Build APK (single task)
         run: gradle --no-daemon --max-workers=1 assembleDebug
 
+      - name: Rename APK with actual generation timestamp
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          STAMP="$(date +%Y%m%d-%H%M%S)"
+          mv "$APK" "app/build/outputs/apk/debug/$STAMP.apk"
+          echo "APK_PATH=app/build/outputs/apk/debug/$STAMP.apk" >> "$GITHUB_ENV"
+          sha256sum "app/build/outputs/apk/debug/$STAMP.apk"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: ipspeed-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.APK_PATH }}
           if-no-files-found: error
           retention-days: 14
