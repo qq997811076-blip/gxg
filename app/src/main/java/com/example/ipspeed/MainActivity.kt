@@ -164,7 +164,7 @@ class MainActivity : Activity() {
 
         localCheck = CheckBox(this).apply {
             text = "启用已选择的本地文件 IP"
-            isChecked = prefs.getBoolean("localEnabled", true)
+            isChecked = prefs.getBoolean("localEnabled", false)
         }
         networkCheck = CheckBox(this).apply {
             text = "启用网络 URL 来源"
