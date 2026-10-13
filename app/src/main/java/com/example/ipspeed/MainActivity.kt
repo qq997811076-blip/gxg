@@ -150,8 +150,10 @@ class MainActivity : Activity() {
         root.addView(button("选择 TXT / CSV 文件") {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
+                // 不限制 MIME 类型：部分手机文件管理器会把 .csv 标记为
+                // application/octet-stream 或其他类型，导致 CSV 无法选择。
+                // 选择后再按文件名/内容识别 CSV 或 TXT。
                 type = "*/*"
-                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("text/plain", "text/csv", "application/csv", "application/vnd.ms-excel"))
             }
             startActivityForResult(intent, 701)
         })
