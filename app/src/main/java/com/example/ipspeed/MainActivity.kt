@@ -97,13 +97,56 @@ class MainActivity : Activity() {
         root.addView(input, LinearLayout.LayoutParams(-1, -2))
     }
 
+    private fun attachMainAutoSave(input: EditText) {
+        input.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                saveMainSettings()
+            }
+            override fun afterTextChanged(s: android.text.Editable?) {}
+        })
+    }
+
+    private fun saveMainSettings(): Boolean {
+        return try {
+            val ok = prefs.edit()
+                .putString("target", targetInput.text.toString())
+                .putString("connectN", connectInput.text.toString())
+                .putString("downloadN", downloadInput.text.toString())
+                .putString("topN", topNInput.text.toString())
+                .putString("threshold", thresholdInput.text.toString())
+                .commit()
+            if (!ok) Toast.makeText(this, "设置保存失败，请检查设备存储空间", Toast.LENGTH_LONG).show()
+            ok
+        } catch (e: Exception) {
+            Toast.makeText(this, "设置保存失败：${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+            false
+        }
+    }
+
+    private fun saveSourceSettings(): Boolean {
+        if (!::urlsInput.isInitialized || !::localCheck.isInitialized || !::networkCheck.isInitialized) return false
+        return try {
+            val ok = prefs.edit()
+                .putString("urls", urlsInput.text.toString())
+                .putBoolean("localEnabled", localCheck.isChecked)
+                .putBoolean("networkEnabled", networkCheck.isChecked)
+                .commit()
+            if (!ok) Toast.makeText(this, "IP 来源设置保存失败，请检查设备存储空间", Toast.LENGTH_LONG).show()
+            ok
+        } catch (e: Exception) {
+            Toast.makeText(this, "IP 来源设置保存失败：${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+            false
+        }
+    }
+
     private fun showMain() {
         sourcePage = false
         makeRoot()
         root.addView(label("IP 测速", 24f))
         root.addView(label("保留原 Go 测速核心；界面通过独立适配层调用。", 14f))
 
-        targetInput = edit("HTTPS 测速地址", prefs.getString("target", "https://cesu.dxgees.ggff.net")!!)
+        targetInput = edit("HTTPS 测速地址", prefs.getString("target", "https://speed.cloudflare.com/__down?bytes=50000000")!!)
         connectInput = edit("连通性并发数", prefs.getString("connectN", "300")!!)
         downloadInput = edit("下载测速并发数", prefs.getString("downloadN", "100")!!)
         topNInput = edit("参与下载测速的低延迟 IP 数量", prefs.getString("topN", "20")!!)
@@ -128,6 +171,7 @@ class MainActivity : Activity() {
         resultsView.setPadding(dp(10), dp(10), dp(10), dp(10))
         resultsView.setBackgroundColor(0xFFEFEFEF.toInt())
         root.addView(resultsView, LinearLayout.LayoutParams(-1, dp(280)))
+        listOf(targetInput, connectInput, downloadInput, topNInput, thresholdInput).forEach { attachMainAutoSave(it) }
         thresholdInput.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
@@ -179,9 +223,15 @@ class MainActivity : Activity() {
         root.addView(label("网络 URL（每行一个，可直接编辑、添加或删除）"))
         urlsInput = edit("每行一个 HTTPS URL", prefs.getString("urls", defaults.joinToString("\n"))!!, false)
         root.addView(urlsInput, LinearLayout.LayoutParams(-1, dp(160)))
+        urlsInput.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { saveSourceSettings() }
+            override fun afterTextChanged(s: android.text.Editable?) {}
+        })
+        localCheck.setOnCheckedChangeListener { _, _ -> saveSourceSettings() }
+        networkCheck.setOnCheckedChangeListener { _, _ -> saveSourceSettings() }
         root.addView(button("保存网络 URL") {
-            prefs.edit().putString("urls", urlsInput.text.toString()).apply()
-            Toast.makeText(this, "URL 已保存", Toast.LENGTH_SHORT).show()
+            if (saveSourceSettings()) Toast.makeText(this, "URL 已保存", Toast.LENGTH_SHORT).show()
         })
         root.addView(button("保存设置并返回") {
             prefs.edit()
@@ -434,6 +484,9 @@ class MainActivity : Activity() {
                         }
                     } else {
                         resultsView.text = if (visible.isEmpty()) "没有达到显示标准的结果" else visible.joinToString("\n\n")
+                        val snapshot = visible.joinToString("\n")
+                        val saved = try { prefs.edit().putString("last_completed_result", snapshot).commit() } catch (_: Exception) { false }
+                        if (!saved) Toast.makeText(this, "最近一次测速结果保存失败", Toast.LENGTH_LONG).show()
                         status.text = "状态：完成；结果 ${visible.size} 条"
                     }
                 }
@@ -466,7 +519,11 @@ class MainActivity : Activity() {
 
     private fun copyResults() {
         val threshold = thresholdInput.text.toString().toDoubleOrNull() ?: 0.5
-        val text = filterResults(resultLines, threshold).joinToString("\n")
+        val text = if (resultLines.isNotEmpty()) {
+            filterResults(resultLines, threshold).joinToString("\n")
+        } else {
+            prefs.getString("last_completed_result", "").orEmpty()
+        }
         if (text.isBlank()) {
             Toast.makeText(this, "没有可复制的结果", Toast.LENGTH_SHORT).show()
             return
