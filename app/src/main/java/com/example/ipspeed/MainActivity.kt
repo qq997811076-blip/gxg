@@ -332,11 +332,23 @@ class MainActivity : Activity() {
                     .filter { Regex("^[0-9]{1,3}(?:\\.[0-9]{1,3}){3}#[0-9]+(?:\\.[0-9]+)?M$").matches(it) }
                     .toList()
                 resultLines = parsed
+                val outputText = all.toString().trim()
                 runOnUiThread {
                     process = null
                     val visible = filterResults(parsed, threshold)
-                    resultsView.text = if (visible.isEmpty()) "没有达到显示标准的结果" else visible.joinToString("\n\n")
-                    status.text = "状态：${if (exitCode == 0) "完成" else "结束（代码 $exitCode）"}；结果 ${visible.size} 条"
+                    if (exitCode != 0 || parsed.isEmpty()) {
+                        resultsView.text = outputText.takeLast(6000).ifBlank {
+                            "测速程序没有输出日志。请检查 IP 来源设置和测速地址。"
+                        }
+                        status.text = if (exitCode == 0) {
+                            "状态：程序已结束，但没有识别到测速结果"
+                        } else {
+                            "状态：测速程序异常退出（代码 $exitCode），详细日志见下方"
+                        }
+                    } else {
+                        resultsView.text = if (visible.isEmpty()) "没有达到显示标准的结果" else visible.joinToString("\n\n")
+                        status.text = "状态：完成；结果 ${visible.size} 条"
+                    }
                 }
             } catch (e: Exception) {
                 runOnUiThread {
