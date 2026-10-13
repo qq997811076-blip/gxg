@@ -214,11 +214,16 @@ class MainActivity : Activity() {
             val isCsv = name.endsWith(".csv") || content.lineSequence().firstOrNull()?.contains(",") == true
             val parsed = parseImported(content, isCsv)
             importedIPs = parsed.first
-            prefs.edit().putString("imported_ips", importedIPs.joinToString("\n")).apply()
+            // 保存去重后的列表，并自动启用本地来源，避免测速时忽略刚导入的文件。
+            prefs.edit()
+                .putString("imported_ips", importedIPs.joinToString("\n"))
+                .putBoolean("localEnabled", importedIPs.isNotEmpty())
+                .apply()
             if (!::sourceStats.isInitialized) {
                 showSources()
             }
-            sourceStats.text = "有效唯一 IPv4：${parsed.first.size}；重复数量：${parsed.second}"
+            localCheck.isChecked = importedIPs.isNotEmpty()
+            sourceStats.text = "文件识别重复：${parsed.second}；实际保存唯一 IPv4：${parsed.first.size}"
             val message = if (parsed.first.isEmpty()) {
                 "文件已读取，但没有识别到有效 IPv4；请确认 CSV 内容包含 IPv4 地址"
             } else {
@@ -334,10 +339,12 @@ class MainActivity : Activity() {
         executor.execute {
             val sourceLog = StringBuilder()
             try {
+                // 再次规范化本地保存内容，防止旧版本保存的重复/非规范 IP 混入测速。
                 val mergedIPs = linkedSetOf<String>()
                 if (localEnabled) {
-                    mergedIPs.addAll(importedIPs)
-                    sourceLog.append("本地来源：加入 ${importedIPs.size} 个唯一 IPv4\n")
+                    val localUnique = parseImported(importedIPs.joinToString("\n"), false).first
+                    mergedIPs.addAll(localUnique)
+                    sourceLog.append("本地来源：原保存 ${importedIPs.size} 条；重新去重后加入 ${localUnique.size} 个唯一 IPv4\n")
                 } else {
                     sourceLog.append("本地来源：未启用\n")
                 }
@@ -383,8 +390,15 @@ class MainActivity : Activity() {
                     return@execute
                 }
 
-                ipFile.writeText(mergedIPs.joinToString("\n") + "\n")
-                sourceLog.append("全部来源合并去重后：${mergedIPs.size} 个唯一 IPv4\n\n")
+                // 写入前最后一次规范化去重；Go 核心读取的就是这份文件。
+                val finalIPs = parseImported(mergedIPs.joinToString("\n"), false).first
+                ipFile.writeText(finalIPs.joinToString("\n") + "\n")
+                sourceLog.append("全部来源合并去重后：${finalIPs.size} 个唯一 IPv4\n")
+                sourceLog.append("最终写入 ips.txt、交给测速核心：${finalIPs.size} 个 IP\n\n")
+                runOnUiThread {
+                    status.text = "状态：即将测速，共 ${finalIPs.size} 个唯一 IP"
+                    resultsView.text = sourceLog.toString()
+                }
                 val p = ProcessBuilder(args).directory(filesDir).redirectErrorStream(true).start()
                 process = p
                 runOnUiThread { status.text = "状态：测速进行中" }
