@@ -2,8 +2,6 @@ name: Build APK
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
 
 permissions:
   contents: read
@@ -29,11 +27,10 @@ jobs:
         with:
           go-version: '1.23.x'
 
-      - name: Compile unchanged Go source for Android ARM64
+      - name: Compile Go source for Android ARM64 without formatting it
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p app/src/main/assets
           test -s app/src/main/assets/myspeed.go
           sha256sum app/src/main/assets/myspeed.go | tee /tmp/myspeed.sha256
           export GOOS=android GOARCH=arm64 CGO_ENABLED=0
