@@ -1171,7 +1171,7 @@ class MainActivity : Activity() {
                             "状态：测速程序异常退出（代码 $exitCode），详细日志见下方"
                         }
                     } else {
-                        resultsView.text = if (visible.isEmpty()) "没有达到显示标准的结果" else visible.joinToString("\n\n")
+                        resultsView.text = if (visible.isEmpty()) "没有达到显示标准的结果" else visible.joinToString("\n")
                         val snapshot = visible.joinToString("\n")
                         val saved = try { prefs.edit().putString("last_completed_result", snapshot).commit() } catch (_: Exception) { false }
                         if (!saved) Toast.makeText(this, "最近一次测速结果保存失败", Toast.LENGTH_LONG).show()
