@@ -3,6 +3,8 @@ package com.example.ipspeed
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.security.keystore.KeyGenParameterSpec
@@ -264,12 +266,112 @@ class MainActivity : Activity() {
     }
 
     private fun showAutoUploadChoices() {
-        AlertDialog.Builder(this)
-            .setTitle("自动上传设置")
-            .setItems(arrayOf("关闭自动上传", "启用自动上传")) { _, which ->
-                setAutoUploadEnabled(which == 1)
+        val enabled = prefs.getBoolean("github_auto_upload", false)
+
+        fun roundedBackground(color: Int, strokeColor: Int = color): GradientDrawable =
+            GradientDrawable().apply {
+                setColor(color)
+                cornerRadius = dp(16).toFloat()
+                setStroke(dp(1), strokeColor)
             }
-            .setNegativeButton("取消", null)
+
+        fun actionCard(
+            title: String,
+            subtitle: String,
+            selected: Boolean,
+            action: () -> Unit
+        ): LinearLayout {
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(16), dp(12), dp(16), dp(12))
+                background = roundedBackground(
+                    if (selected) Color.rgb(235, 245, 255) else Color.rgb(248, 249, 252),
+                    if (selected) Color.rgb(53, 120, 220) else Color.rgb(225, 229, 236)
+                )
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { action() }
+            }
+            card.addView(TextView(this).apply {
+                text = (if (selected) "✓  " else "") + title
+                textSize = 16f
+                setTextColor(if (selected) Color.rgb(35, 95, 180) else Color.rgb(35, 42, 52))
+                setTypeface(null, android.graphics.Typeface.BOLD)
+            })
+            card.addView(TextView(this).apply {
+                text = subtitle
+                textSize = 13f
+                setTextColor(Color.rgb(105, 113, 126))
+                setPadding(0, dp(5), 0, 0)
+            })
+            return card
+        }
+
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(22), dp(10), dp(22), dp(8))
+        }
+
+        panel.addView(TextView(this).apply {
+            text = "自动上传设置"
+            textSize = 23f
+            setTextColor(Color.rgb(30, 39, 54))
+            setTypeface(null, android.graphics.Typeface.BOLD)
+        })
+        panel.addView(TextView(this).apply {
+            text = "选择测速结束后是否自动把结果上传到 GitHub。"
+            textSize = 14f
+            setTextColor(Color.rgb(105, 113, 126))
+            setPadding(0, dp(7), 0, dp(16))
+        })
+
+        val statusCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = roundedBackground(
+                if (enabled) Color.rgb(235, 248, 240) else Color.rgb(245, 246, 248),
+                if (enabled) Color.rgb(180, 225, 194) else Color.rgb(225, 229, 236)
+            )
+        }
+        statusCard.addView(TextView(this).apply {
+            text = if (enabled) "●  当前状态：已开启" else "○  当前状态：已关闭"
+            textSize = 15f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(if (enabled) Color.rgb(32, 126, 73) else Color.rgb(95, 103, 115))
+        })
+        statusCard.addView(TextView(this).apply {
+            text = if (enabled) "每次测速完成后，将按当前配置自动上传。" else "测速结果只保存在本机，需要时可手动上传。"
+            textSize = 12f
+            setTextColor(Color.rgb(105, 113, 126))
+            setPadding(0, dp(5), 0, 0)
+        })
+        panel.addView(statusCard)
+
+        panel.addView(actionCard(
+            "开启自动上传",
+            "测速结束后自动提交结果，无需手动操作",
+            enabled
+        ) {
+            setAutoUploadEnabled(true)
+            showAutoUploadChoices()
+        }, LinearLayout.LayoutParams(-1, -2).apply {
+            topMargin = dp(14)
+        })
+
+        panel.addView(actionCard(
+            "关闭自动上传",
+            "停止自动提交，其他测速功能不受影响",
+            !enabled
+        ) {
+            setAutoUploadEnabled(false)
+            showAutoUploadChoices()
+        }, LinearLayout.LayoutParams(-1, -2).apply {
+            topMargin = dp(10)
+        })
+
+        AlertDialog.Builder(this)
+            .setView(panel)
+            .setNegativeButton("完成", null)
             .show()
     }
 
