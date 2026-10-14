@@ -615,7 +615,7 @@ class MainActivity : Activity() {
         status = label("状态：待开始", 14f)
         status.setPadding(0, dp(2), 0, dp(8))
         root.addView(status)
-        root.addView(label("合格结果（按速度从低到高）", 16f))
+        root.addView(label("合格结果（按速度从高到低）", 16f))
         resultsView = label("暂无结果")
         resultsView.textSize = 14f
         resultsView.setPadding(dp(12), dp(12), dp(12), dp(12))
@@ -1195,6 +1195,8 @@ class MainActivity : Activity() {
         lines.filter { line ->
             val speed = line.substringAfter("#").substringBefore("M").toDoubleOrNull() ?: 0.0
             speed >= threshold
+        }.sortedByDescending { line ->
+            line.substringAfter("#").substringBefore("M").toDoubleOrNull() ?: 0.0
         }
 
     private fun stopTest() {
