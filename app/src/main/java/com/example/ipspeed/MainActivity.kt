@@ -1,24 +1,39 @@
 package com.example.ipspeed
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.text.InputType
+import android.util.Base64
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.KeyStore
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 
 class MainActivity : Activity() {
     private val prefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
@@ -27,8 +42,28 @@ class MainActivity : Activity() {
     private var importedIPs: List<String> = emptyList()
     private var resultLines: List<String> = emptyList()
     private var sourcePage = false
+    private var githubPage = false
     private var geoRowsByIP: Map<String, String> = emptyMap()
     private var countryCodesByIP: Map<String, String> = emptyMap()
+    private lateinit var githubTokenInput: EditText
+    private lateinit var githubUsernameInput: EditText
+    private lateinit var githubRepoInput: EditText
+    private lateinit var githubBranchInput: EditText
+    private lateinit var githubPathInput: EditText
+    private lateinit var githubModeGroup: RadioGroup
+    private var githubAutoStatusView: TextView? = null
+    private var githubConnectionStatusView: TextView? = null
+    private var githubLastUploadTimeView: TextView? = null
+    private var githubLastUploadCountView: TextView? = null
+
+    private data class GitHubConfig(
+        val token: String,
+        val username: String,
+        val repository: String,
+        val branch: String,
+        val path: String,
+        val mode: String
+    )
 
     private data class GeoMetadata(
         val rows: Map<String, String>,
@@ -106,6 +141,337 @@ class MainActivity : Activity() {
         root.addView(input, LinearLayout.LayoutParams(-1, -2))
     }
 
+    private fun addInlineField(title: String, input: EditText) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val titleView = label(title, 14f).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            minWidth = dp(112)
+            setPadding(0, dp(4), dp(6), dp(4))
+        }
+        row.addView(titleView, LinearLayout.LayoutParams(dp(112), -2))
+        row.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
+        root.addView(row, LinearLayout.LayoutParams(-1, -2))
+    }
+
+    private fun tokenKey(): SecretKey {
+        val alias = "ipspeed_github_token_key"
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (store.getKey(alias, null) as? SecretKey)?.let { return it }
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                alias,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setRandomizedEncryptionRequired(true)
+                .build()
+        )
+        return generator.generateKey()
+    }
+
+    private fun encryptToken(token: String): String {
+        if (token.isEmpty()) return ""
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, tokenKey())
+        val encrypted = cipher.doFinal(token.toByteArray(Charsets.UTF_8))
+        return Base64.encodeToString(cipher.iv + encrypted, Base64.NO_WRAP)
+    }
+
+    private fun decryptToken(encryptedToken: String?): String {
+        if (encryptedToken.isNullOrBlank()) return ""
+        return try {
+            val packed = Base64.decode(encryptedToken, Base64.NO_WRAP)
+            if (packed.size <= 12) return ""
+            val iv = packed.copyOfRange(0, 12)
+            val encrypted = packed.copyOfRange(12, packed.size)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, tokenKey(), GCMParameterSpec(128, iv))
+            String(cipher.doFinal(encrypted), Charsets.UTF_8)
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun saveGitHubSettings(showToast: Boolean = true): Boolean {
+        if (!::githubTokenInput.isInitialized ||
+            !::githubUsernameInput.isInitialized ||
+            !::githubRepoInput.isInitialized ||
+            !::githubBranchInput.isInitialized ||
+            !::githubPathInput.isInitialized ||
+            !::githubModeGroup.isInitialized
+        ) return false
+
+        return try {
+            val mode = when (githubModeGroup.checkedRadioButtonId) {
+                1001 -> "overwrite"
+                1002 -> "append"
+                else -> ""
+            }
+            val editor = prefs.edit()
+                .putString("github_token_enc", encryptToken(githubTokenInput.text.toString().trim()))
+                .putString("github_username", githubUsernameInput.text.toString().trim())
+                .putString("github_repository", githubRepoInput.text.toString().trim())
+                .putString("github_branch", githubBranchInput.text.toString().trim())
+                .putString("github_path", githubPathInput.text.toString().trim())
+                .putString("github_mode", mode)
+            val ok = editor.commit()
+            if (!ok && showToast) {
+                Toast.makeText(this, "GitHub 设置保存失败", Toast.LENGTH_LONG).show()
+            } else if (ok && showToast) {
+                Toast.makeText(this, "GitHub 设置已保存", Toast.LENGTH_SHORT).show()
+            }
+            ok
+        } catch (e: Exception) {
+            if (showToast) {
+                Toast.makeText(this, "GitHub 设置保存失败：${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+            }
+            false
+        }
+    }
+
+    private fun loadGitHubConfig(): GitHubConfig = GitHubConfig(
+        token = decryptToken(prefs.getString("github_token_enc", "")),
+        username = prefs.getString("github_username", "").orEmpty(),
+        repository = prefs.getString("github_repository", "").orEmpty(),
+        branch = prefs.getString("github_branch", "").orEmpty(),
+        path = prefs.getString("github_path", "").orEmpty(),
+        mode = prefs.getString("github_mode", "").orEmpty()
+    )
+
+    private fun updateGitHubStatusViews() {
+        githubAutoStatusView?.text = if (prefs.getBoolean("github_auto_upload", false)) "已启用" else "已关闭"
+        githubConnectionStatusView?.text = prefs.getString("github_status", "未检测") ?: "未检测"
+        githubLastUploadTimeView?.text = prefs.getString("github_last_upload_time", "--") ?: "--"
+        githubLastUploadCountView?.text = prefs.getString("github_last_upload_count", "--") ?: "--"
+    }
+
+    private fun currentCopyText(): String {
+        val threshold = if (::thresholdInput.isInitialized) {
+            thresholdInput.text.toString().toDoubleOrNull() ?: 0.5
+        } else {
+            0.5
+        }
+        return if (resultLines.isNotEmpty()) {
+            filterResults(resultLines, threshold).joinToString("\n")
+        } else {
+            prefs.getString("last_completed_result", "").orEmpty()
+        }
+    }
+
+    private fun setAutoUploadEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("github_auto_upload", enabled).commit()
+        Toast.makeText(
+            this,
+            if (enabled) "已启用测速完成后自动上传" else "已关闭自动上传",
+            Toast.LENGTH_SHORT
+        ).show()
+        updateGitHubStatusViews()
+    }
+
+    private fun showAutoUploadChoices() {
+        AlertDialog.Builder(this)
+            .setTitle("自动上传设置")
+            .setItems(arrayOf("关闭自动上传", "启用自动上传")) { _, which ->
+                setAutoUploadEnabled(which == 1)
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showGitHubSettings() {
+        sourcePage = false
+        githubPage = true
+        makeRoot()
+        root.addView(label("GitHub 设置", 24f))
+        root.addView(label("填写 Token、仓库信息后保存。Token 会使用 Android Keystore 加密保存。", 13f))
+
+        githubTokenInput = edit("GitHub Token", decryptToken(prefs.getString("github_token_enc", "")))
+        githubTokenInput.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        githubUsernameInput = edit("GitHub 用户名", prefs.getString("github_username", "").orEmpty())
+        githubRepoInput = edit("仓库名称", prefs.getString("github_repository", "").orEmpty())
+        githubBranchInput = edit("分支名称", prefs.getString("github_branch", "").orEmpty())
+        githubPathInput = edit("上传文件路径", prefs.getString("github_path", "").orEmpty())
+
+        addInlineField("GitHub Token", githubTokenInput)
+        addInlineField("GitHub 用户名", githubUsernameInput)
+        addInlineField("仓库名称", githubRepoInput)
+        addInlineField("分支名称", githubBranchInput)
+        addInlineField("上传文件路径", githubPathInput)
+
+        root.addView(label("上传模式", 16f))
+        githubModeGroup = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        val overwrite = RadioButton(this).apply {
+            id = 1001
+            text = "覆盖上传"
+        }
+        val append = RadioButton(this).apply {
+            id = 1002
+            text = "追加上传"
+        }
+        githubModeGroup.addView(overwrite)
+        githubModeGroup.addView(append)
+        when (prefs.getString("github_mode", "").orEmpty()) {
+            "overwrite" -> githubModeGroup.check(1001)
+            "append" -> githubModeGroup.check(1002)
+            else -> githubModeGroup.clearCheck()
+        }
+        root.addView(githubModeGroup)
+
+        root.addView(label("上传内容：当前显示结果（与“复制当前显示结果”完全一致）", 14f))
+        root.addView(label("自动上传状态", 14f))
+        githubAutoStatusView = label("已关闭", 14f)
+        root.addView(githubAutoStatusView)
+        root.addView(label("GitHub 上传状态", 14f))
+        githubConnectionStatusView = label("未检测", 14f)
+        root.addView(githubConnectionStatusView)
+        root.addView(label("最后上传时间", 14f))
+        githubLastUploadTimeView = label("--", 14f)
+        root.addView(githubLastUploadTimeView)
+        root.addView(label("最后上传数量", 14f))
+        githubLastUploadCountView = label("--", 14f)
+        root.addView(githubLastUploadCountView)
+        updateGitHubStatusViews()
+
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        actions.addView(button("保存设置") { saveGitHubSettings(true) }, LinearLayout.LayoutParams(0, -2, 1f))
+        actions.addView(button("测试上传") {
+            if (saveGitHubSettings(false)) startGitHubUpload(currentCopyText(), false)
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        root.addView(actions)
+        root.addView(button("返回主页面") { showMain() })
+
+        val watchers = listOf(
+            githubTokenInput, githubUsernameInput, githubRepoInput,
+            githubBranchInput, githubPathInput
+        )
+        watchers.forEach { input ->
+            input.addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                    saveGitHubSettings(false)
+                }
+                override fun afterTextChanged(s: android.text.Editable?) {}
+            })
+        }
+        githubModeGroup.setOnCheckedChangeListener { _, _ -> saveGitHubSettings(false) }
+    }
+
+    private fun startGitHubUpload(content: String, automatic: Boolean) {
+        if (content.isBlank()) {
+            recordGitHubUpload(false, "上传失败：没有可上传的当前显示结果", 0)
+            return
+        }
+        executor.execute {
+            try {
+                val count = uploadToGitHub(content)
+                recordGitHubUpload(true, if (automatic) "自动上传成功" else "上传成功", count)
+            } catch (e: Exception) {
+                val reason = e.message ?: e.javaClass.simpleName
+                recordGitHubUpload(false, "上传失败：$reason", 0)
+            }
+        }
+    }
+
+    private fun recordGitHubUpload(success: Boolean, message: String, count: Int) {
+        val editor = prefs.edit().putString("github_status", message)
+        if (success) {
+            editor.putString(
+                "github_last_upload_time",
+                SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+            )
+            editor.putString("github_last_upload_count", count.toString())
+        }
+        editor.commit()
+        runOnUiThread {
+            updateGitHubStatusViews()
+            Toast.makeText(this, message, if (success) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun uploadToGitHub(content: String): Int {
+        val config = loadGitHubConfig()
+        if (config.token.isBlank()) throw IOException("请先填写 GitHub Token")
+        if (config.username.isBlank()) throw IOException("请填写 GitHub 用户名")
+        if (config.repository.isBlank()) throw IOException("请填写仓库名称")
+        if (config.branch.isBlank()) throw IOException("请填写分支名称")
+        if (config.path.isBlank()) throw IOException("请填写上传文件路径")
+        if (config.mode != "overwrite" && config.mode != "append") throw IOException("请先选择覆盖上传或追加上传")
+
+        val encodedPath = config.path.trim('/').split('/').joinToString("/") { Uri.encode(it) }
+        val branchQuery = Uri.encode(config.branch)
+        val apiUrl = "https://api.github.com/repos/${config.username}/${config.repository}/contents/$encodedPath?ref=$branchQuery"
+        var existingContent = ""
+        var existingSha: String? = null
+        var getConnection: HttpURLConnection? = null
+        try {
+            getConnection = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 15000
+                readTimeout = 30000
+                setRequestProperty("Authorization", "Bearer ${config.token}")
+                setRequestProperty("Accept", "application/vnd.github+json")
+                setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+                setRequestProperty("User-Agent", "IPSpeed-Android")
+            }
+            val code = getConnection.responseCode
+            if (code == HttpURLConnection.HTTP_OK) {
+                val json = getConnection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                val file = org.json.JSONObject(json)
+                existingSha = file.optString("sha").takeIf { it.isNotBlank() && it != "null" }
+                val encoded = file.optString("content", "").replace("\n", "").replace("\r", "")
+                if (encoded.isNotBlank()) {
+                    existingContent = String(Base64.decode(encoded, Base64.DEFAULT), Charsets.UTF_8)
+                }
+            } else if (code != HttpURLConnection.HTTP_NOT_FOUND) {
+                val detail = getConnection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                throw IOException("读取 GitHub 文件失败（HTTP $code）：${detail.take(300)}")
+            }
+        } finally {
+            getConnection?.disconnect()
+        }
+
+        val newContent = if (config.mode == "append" && existingContent.isNotEmpty()) {
+            existingContent + (if (existingContent.endsWith("\n")) "" else "\n") + content
+        } else {
+            content
+        }
+        val encodedContent = Base64.encodeToString(newContent.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+        val body = org.json.JSONObject()
+            .put("message", if (config.mode == "append") "Append IP speed test results" else "Update IP speed test results")
+            .put("content", encodedContent)
+            .put("branch", config.branch)
+        existingSha?.let { body.put("sha", it) }
+
+        var putConnection: HttpURLConnection? = null
+        try {
+            putConnection = (URL("https://api.github.com/repos/${config.username}/${config.repository}/contents/$encodedPath").openConnection() as HttpURLConnection).apply {
+                requestMethod = "PUT"
+                connectTimeout = 15000
+                readTimeout = 30000
+                doOutput = true
+                setRequestProperty("Authorization", "Bearer ${config.token}")
+                setRequestProperty("Accept", "application/vnd.github+json")
+                setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+                setRequestProperty("User-Agent", "IPSpeed-Android")
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+            putConnection.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(body.toString()) }
+            val code = putConnection.responseCode
+            if (code !in 200..299) {
+                val detail = putConnection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                throw IOException("写入 GitHub 失败（HTTP $code）：${detail.take(400)}")
+            }
+        } finally {
+            putConnection?.disconnect()
+        }
+        return content.lineSequence().count { it.isNotBlank() }
+    }
+
     private fun attachMainAutoSave(input: EditText) {
         input.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -151,6 +517,11 @@ class MainActivity : Activity() {
 
     private fun showMain() {
         sourcePage = false
+        githubPage = false
+        githubAutoStatusView = null
+        githubConnectionStatusView = null
+        githubLastUploadTimeView = null
+        githubLastUploadCountView = null
         makeRoot()
         root.addView(label("IP 测速", 24f))
         root.addView(label("保留原 Go 测速核心；界面通过独立适配层调用。", 14f))
@@ -172,6 +543,10 @@ class MainActivity : Activity() {
         controls.addView(button("停止测速") { stopTest() }, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(controls)
         root.addView(button("复制当前显示结果") { copyResults() })
+        val githubActions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        githubActions.addView(button("GitHub 设置") { showGitHubSettings() }, LinearLayout.LayoutParams(0, -2, 1f))
+        githubActions.addView(button("自动上传") { showAutoUploadChoices() }, LinearLayout.LayoutParams(0, -2, 1f))
+        root.addView(githubActions)
         status = label("状态：待开始", 14f)
         root.addView(status)
         root.addView(label("合格结果（按速度从低到高）", 18f))
@@ -197,6 +572,7 @@ class MainActivity : Activity() {
 
     private fun showSources() {
         sourcePage = true
+        githubPage = false
         makeRoot()
         root.addView(label("IP 来源管理", 24f))
         root.addView(label("TXT：忽略行首空白，只保留行首 IPv4；CSV：从字段中提取 IPv4。保留同一行的地理信息用于结果显示；IPv6 不支持。", 14f))
@@ -680,6 +1056,9 @@ class MainActivity : Activity() {
                         val saved = try { prefs.edit().putString("last_completed_result", snapshot).commit() } catch (_: Exception) { false }
                         if (!saved) Toast.makeText(this, "最近一次测速结果保存失败", Toast.LENGTH_LONG).show()
                         status.text = "状态：完成；结果 ${visible.size} 条"
+                        if (prefs.getBoolean("github_auto_upload", false) && snapshot.isNotBlank()) {
+                            startGitHubUpload(snapshot, true)
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -710,12 +1089,7 @@ class MainActivity : Activity() {
     }
 
     private fun copyResults() {
-        val threshold = thresholdInput.text.toString().toDoubleOrNull() ?: 0.5
-        val text = if (resultLines.isNotEmpty()) {
-            filterResults(resultLines, threshold).joinToString("\n")
-        } else {
-            prefs.getString("last_completed_result", "").orEmpty()
-        }
+        val text = currentCopyText()
         if (text.isBlank()) {
             Toast.makeText(this, "没有可复制的结果", Toast.LENGTH_SHORT).show()
             return
@@ -723,6 +1097,15 @@ class MainActivity : Activity() {
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
         clipboard.setPrimaryClip(android.content.ClipData.newPlainText("测速结果", text))
         Toast.makeText(this, "已复制 ${text.lines().size} 条结果", Toast.LENGTH_SHORT).show()
+    }
+
+    @Deprecated("Deprecated in Android API")
+    override fun onBackPressed() {
+        when {
+            githubPage -> showMain()
+            sourcePage -> showMain()
+            else -> super.onBackPressed()
+        }
     }
 
     override fun onDestroy() {
