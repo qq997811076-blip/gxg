@@ -574,7 +574,10 @@ class MainActivity : Activity() {
             prefs.edit().putString("github_mode", mode).commit()
         }
         root.addView(githubModeGroup)
-        val uploadActions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val uploadActions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
         uploadActions.addView(button("立即上传") {
             val config = loadGitHubConfig()
             if (config.token.isBlank() || config.username.isBlank() || config.repository.isBlank() || config.branch.isBlank() || config.path.isBlank()) {
@@ -583,10 +586,13 @@ class MainActivity : Activity() {
             } else if (prefs.getString("github_mode", "").orEmpty().isBlank()) {
                 Toast.makeText(this, "请先选择覆盖上传或追加上传", Toast.LENGTH_LONG).show()
             } else startGitHubUpload(currentCopyText(), false)
-        }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
+        }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(6) })
         uploadActions.addView(android.widget.Switch(this).apply {
             text = "自动上传"
             isChecked = prefs.getBoolean("github_auto_upload", false)
+            minWidth = 0
+            minimumWidth = 0
+            gravity = Gravity.CENTER
             thumbTintList = android.content.res.ColorStateList(
                 arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
                 intArrayOf(Color.rgb(40, 120, 232), Color.rgb(139, 146, 156))
@@ -596,10 +602,16 @@ class MainActivity : Activity() {
                 intArrayOf(Color.rgb(105, 160, 235), Color.rgb(190, 194, 200))
             )
             setOnCheckedChangeListener { _, checked -> setAutoUploadEnabled(checked) }
-        }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
+        }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) })
         root.addView(uploadActions)
 
-        root.addView(label("五、测速结果", 18f))
+        val resultHeaderRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        resultHeaderRow.addView(label("五、测速结果", 18f), LinearLayout.LayoutParams(0, -2, 1f))
+        resultHeaderRow.addView(button("复制当前结果") { copyResults() }, LinearLayout.LayoutParams(-2, -2))
+        root.addView(resultHeaderRow)
         status = label("状态：待开始", 14f)
         status.setPadding(0, dp(2), 0, dp(8))
         root.addView(status)
