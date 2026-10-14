@@ -654,10 +654,26 @@ class MainActivity : Activity() {
             val isCsv = name.endsWith(".csv") || content.lineSequence().firstOrNull()?.contains(",") == true
             val parsed = parseImported(content, isCsv)
             val geo = parseGeoMetadata(content, isCsv)
-            importedIPs = parsed.first
-            geoRowsByIP = geo.rows.filterKeys { importedIPs.contains(it) }
-            countryCodesByIP = geo.countries.filterKeys { importedIPs.contains(it) }
-            // 保存去重后的 IP 与对应原始地理记录，重启后仍可恢复国家/地区/城市等信息。
+
+            // 累计导入：保留旧 IP，并将本次文件的新 IP 追加到末尾。
+            val previousIPs = importedIPs
+            val previousIPSet = previousIPs.toHashSet()
+            val overlaps = parsed.first.count { it in previousIPSet }
+            val duplicateCount = parsed.second + overlaps
+            val mergedIPs = linkedSetOf<String>().apply {
+                addAll(previousIPs)
+                addAll(parsed.first)
+            }
+
+            // 保留已有地理信息和国家代码；旧记录缺失时用新文件的信息补齐。
+            val mergedRows = geoRowsByIP.toMutableMap()
+            val mergedCountries = countryCodesByIP.toMutableMap()
+            mergeGeoMetadata(mergedRows, mergedCountries, geo)
+
+            importedIPs = mergedIPs.toList()
+            geoRowsByIP = mergedRows.filterKeys { importedIPs.contains(it) }
+            countryCodesByIP = mergedCountries.filterKeys { importedIPs.contains(it) }
+
             prefs.edit()
                 .putString("imported_ips", importedIPs.joinToString("\n"))
                 .putBoolean("localEnabled", importedIPs.isNotEmpty())
@@ -667,11 +683,12 @@ class MainActivity : Activity() {
                 showSources()
             }
             localCheck.isChecked = importedIPs.isNotEmpty()
-            sourceStats.text = "文件识别重复：${parsed.second}；实际保存唯一 IPv4：${parsed.first.size}"
+            val addedCount = importedIPs.size - previousIPs.size
+            sourceStats.text = "本次文件重复：$duplicateCount；本次新增：$addedCount；累计保存唯一 IPv4：${importedIPs.size}"
             val message = if (parsed.first.isEmpty()) {
-                "文件已读取，但没有识别到有效 IPv4；请确认 CSV 内容包含 IPv4 地址"
+                "文件已读取，但没有识别到有效 IPv4；已有 IP 已保留"
             } else {
-                "导入完成：${parsed.first.size} 个唯一 IPv4，重复 ${parsed.second} 个"
+                "累计导入完成：本次新增 $addedCount 个，累计保存 ${importedIPs.size} 个唯一 IPv4，重复 $duplicateCount 个"
             }
             Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
