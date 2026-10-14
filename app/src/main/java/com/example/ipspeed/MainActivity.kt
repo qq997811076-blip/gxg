@@ -105,6 +105,8 @@ class MainActivity : Activity() {
             setPadding(dp(16), dp(12), dp(16), dp(16))
         }
         val scroll = ScrollView(this)
+        scroll.setBackgroundResource(R.drawable.app_background)
+        root.setBackgroundColor(android.graphics.Color.TRANSPARENT)
         scroll.addView(root)
         setContentView(scroll)
         return root
@@ -555,9 +557,6 @@ class MainActivity : Activity() {
         })
         localCheck.setOnCheckedChangeListener { _, _ -> saveSourceSettings() }
         networkCheck.setOnCheckedChangeListener { _, _ -> saveSourceSettings() }
-        root.addView(button("保存 IP 来源设置") {
-            if (saveSourceSettings()) Toast.makeText(this, "IP 来源设置已保存", Toast.LENGTH_SHORT).show()
-        })
 
         root.addView(label("三、测速操作", 18f))
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -595,7 +594,6 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
         uploadActions.addView(button("自动上传设置") { showAutoUploadChoices() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
         root.addView(uploadActions)
-        root.addView(button("复制当前显示结果") { copyResults() })
 
         root.addView(label("五、测速结果", 18f))
         status = label("状态：待开始", 14f)
