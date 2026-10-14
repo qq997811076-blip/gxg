@@ -3,6 +3,7 @@
     <application
         android:allowBackup="false"
         android:label="IP测速"
+        android:icon="@drawable/ic_launcher"
         android:usesCleartextTraffic="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
