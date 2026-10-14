@@ -287,23 +287,23 @@ class MainActivity : Activity() {
         sourcePage = false
         githubPage = true
         makeRoot()
-        root.addView(label("GitHub 设置", 24f))
-        root.addView(label("填写 Token、仓库信息后保存。Token 会使用 Android Keystore 加密保存。", 13f))
+        root.addView(label("GitHub 设置", 26f))
+        root.addView(label("Token 使用 Android Keystore 加密保存。修改内容仍会自动保存。", 13f))
 
+        root.addView(label("一、账号与仓库", 18f))
         githubTokenInput = edit("GitHub Token", decryptToken(prefs.getString("github_token_enc", "")))
         githubTokenInput.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         githubUsernameInput = edit("GitHub 用户名", prefs.getString("github_username", "").orEmpty())
         githubRepoInput = edit("仓库名称", prefs.getString("github_repository", "").orEmpty())
         githubBranchInput = edit("分支名称", prefs.getString("github_branch", "").orEmpty())
         githubPathInput = edit("上传文件路径", prefs.getString("github_path", "").orEmpty())
+        addInlineField("Token", githubTokenInput)
+        addInlineField("用户名", githubUsernameInput)
+        addInlineField("仓库", githubRepoInput)
+        addInlineField("分支", githubBranchInput)
+        addInlineField("文件路径", githubPathInput)
 
-        addInlineField("GitHub Token", githubTokenInput)
-        addInlineField("GitHub 用户名", githubUsernameInput)
-        addInlineField("仓库名称", githubRepoInput)
-        addInlineField("分支名称", githubBranchInput)
-        addInlineField("上传文件路径", githubPathInput)
-
-        root.addView(label("上传模式", 16f))
+        root.addView(label("二、上传方式", 18f))
         githubModeGroup = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
         val overwrite = RadioButton(this).apply {
             id = 1001
@@ -321,27 +321,29 @@ class MainActivity : Activity() {
             else -> githubModeGroup.clearCheck()
         }
         root.addView(githubModeGroup)
+        root.addView(label("上传内容：当前显示结果（与“复制当前显示结果”完全一致）", 13f))
 
-        root.addView(label("上传内容：当前显示结果（与“复制当前显示结果”完全一致）", 14f))
-        root.addView(label("自动上传状态", 14f))
+        root.addView(label("三、上传状态", 18f))
+        root.addView(label("自动上传", 13f))
         githubAutoStatusView = label("已关闭", 14f)
         root.addView(githubAutoStatusView)
-        root.addView(label("GitHub 上传状态", 14f))
+        root.addView(label("GitHub 上传", 13f))
         githubConnectionStatusView = label("未检测", 14f)
         root.addView(githubConnectionStatusView)
-        root.addView(label("最后上传时间", 14f))
+        root.addView(label("最后上传时间", 13f))
         githubLastUploadTimeView = label("--", 14f)
         root.addView(githubLastUploadTimeView)
-        root.addView(label("最后上传数量", 14f))
+        root.addView(label("最后上传数量", 13f))
         githubLastUploadCountView = label("--", 14f)
         root.addView(githubLastUploadCountView)
         updateGitHubStatusViews()
 
+        root.addView(label("四、操作", 18f))
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        actions.addView(button("保存设置") { saveGitHubSettings(true) }, LinearLayout.LayoutParams(0, -2, 1f))
+        actions.addView(button("保存设置") { saveGitHubSettings(true) }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
         actions.addView(button("测试上传") {
             if (saveGitHubSettings(false)) startGitHubUpload(currentCopyText(), false)
-        }, LinearLayout.LayoutParams(0, -2, 1f))
+        }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
         root.addView(actions)
         root.addView(button("返回主页面") { showMain() })
 
@@ -523,38 +525,63 @@ class MainActivity : Activity() {
         githubLastUploadTimeView = null
         githubLastUploadCountView = null
         makeRoot()
-        root.addView(label("IP 测速", 24f))
-        root.addView(label("保留原 Go 测速核心；界面通过独立适配层调用。", 14f))
 
+        root.addView(label("IP 测速", 26f))
+        root.addView(label("测速控制台  ·  Go 测速核心保持不变", 13f))
+
+        root.addView(label("一、测速参数", 18f))
         targetInput = edit("HTTPS 测速地址", prefs.getString("target", "https://speed.cloudflare.com/__down?bytes=50000000")!!)
         connectInput = edit("连通性并发数", prefs.getString("connectN", "300")!!)
         downloadInput = edit("下载测速并发数", prefs.getString("downloadN", "100")!!)
         topNInput = edit("参与下载测速的低延迟 IP 数量", prefs.getString("topN", "20")!!)
         thresholdInput = edit("最低显示速度（MiB/s）", prefs.getString("threshold", "0.5")!!)
         addField("测速地址（HTTPS）", targetInput)
-        addField("连通性检测并发数", connectInput)
-        addField("下载测速并发数", downloadInput)
-        addField("延迟最低筛选数量", topNInput)
-        addField("最低显示速度（默认 0.5 MiB/s）", thresholdInput)
+        val concurrencyRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val connectBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        connectBox.addView(label("连通性并发数", 14f))
+        connectBox.addView(connectInput)
+        val downloadBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        downloadBox.addView(label("下载测速并发数", 14f))
+        downloadBox.addView(downloadInput)
+        concurrencyRow.addView(connectBox, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
+        concurrencyRow.addView(downloadBox, LinearLayout.LayoutParams(0, -2, 1f))
+        root.addView(concurrencyRow)
+        val filterRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val topBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        topBox.addView(label("低延迟 IP 数量", 14f))
+        topBox.addView(topNInput)
+        val thresholdBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        thresholdBox.addView(label("最低显示速度（MiB/s）", 14f))
+        thresholdBox.addView(thresholdInput)
+        filterRow.addView(topBox, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
+        filterRow.addView(thresholdBox, LinearLayout.LayoutParams(0, -2, 1f))
+        root.addView(filterRow)
 
+        root.addView(label("二、测速操作", 18f))
         root.addView(button("IP 来源管理") { showSources() })
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        controls.addView(button("开始测速") { startTest() }, LinearLayout.LayoutParams(0, -2, 1f))
-        controls.addView(button("停止测速") { stopTest() }, LinearLayout.LayoutParams(0, -2, 1f))
+        controls.addView(button("开始测速") { startTest() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
+        controls.addView(button("停止测速") { stopTest() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
         root.addView(controls)
         root.addView(button("复制当前显示结果") { copyResults() })
+
+        root.addView(label("三、GitHub 上传", 18f))
         val githubActions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        githubActions.addView(button("GitHub 设置") { showGitHubSettings() }, LinearLayout.LayoutParams(0, -2, 1f))
-        githubActions.addView(button("自动上传") { showAutoUploadChoices() }, LinearLayout.LayoutParams(0, -2, 1f))
+        githubActions.addView(button("GitHub 设置") { showGitHubSettings() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
+        githubActions.addView(button("自动上传") { showAutoUploadChoices() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
         root.addView(githubActions)
+
+        root.addView(label("四、测速结果", 18f))
         status = label("状态：待开始", 14f)
+        status.setPadding(0, dp(2), 0, dp(8))
         root.addView(status)
-        root.addView(label("合格结果（按速度从低到高）", 18f))
+        root.addView(label("合格结果（按速度从低到高）", 16f))
         resultsView = label("暂无结果")
-        resultsView.textSize = 15f
-        resultsView.setPadding(dp(10), dp(10), dp(10), dp(10))
-        resultsView.setBackgroundColor(0xFFEFEFEF.toInt())
-        root.addView(resultsView, LinearLayout.LayoutParams(-1, dp(280)))
+        resultsView.textSize = 14f
+        resultsView.setPadding(dp(12), dp(12), dp(12), dp(12))
+        resultsView.setBackgroundColor(0xFFF1F3F4.toInt())
+        root.addView(resultsView, LinearLayout.LayoutParams(-1, dp(320)))
+
         listOf(targetInput, connectInput, downloadInput, topNInput, thresholdInput).forEach { attachMainAutoSave(it) }
         thresholdInput.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -574,14 +601,14 @@ class MainActivity : Activity() {
         sourcePage = true
         githubPage = false
         makeRoot()
-        root.addView(label("IP 来源管理", 24f))
-        root.addView(label("TXT：忽略行首空白，只保留行首 IPv4；CSV：从字段中提取 IPv4。保留同一行的地理信息用于结果显示；IPv6 不支持。", 14f))
+        root.addView(label("IP 来源管理", 26f))
+        root.addView(label("本地文件与网络 URL 分区管理；导入规则和去重逻辑保持不变。", 13f))
+
+        root.addView(label("一、本地 IP 文件", 18f))
+        root.addView(label("TXT：忽略行首空白，只保留行首 IPv4；CSV：从字段中提取 IPv4。保留同一行的地理信息用于结果显示；IPv6 不支持。", 13f))
         root.addView(button("选择 TXT / CSV 文件") {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
-                // 不限制 MIME 类型：部分手机文件管理器会把 .csv 标记为
-                // application/octet-stream 或其他类型，导致 CSV 无法选择。
-                // 选择后再按文件名/内容识别 CSV 或 TXT。
                 type = "*/*"
             }
             startActivityForResult(intent, 701)
@@ -598,6 +625,7 @@ class MainActivity : Activity() {
             Toast.makeText(this, "已清除", Toast.LENGTH_SHORT).show()
         })
 
+        root.addView(label("二、启用哪些来源", 18f))
         localCheck = CheckBox(this).apply {
             text = "启用已选择的本地文件 IP"
             isChecked = prefs.getBoolean("localEnabled", false)
@@ -608,9 +636,11 @@ class MainActivity : Activity() {
         }
         root.addView(localCheck)
         root.addView(networkCheck)
-        root.addView(label("网络 URL（每行一个，可直接编辑、添加或删除）"))
-        urlsInput = edit("每行一个 HTTPS URL", prefs.getString("urls", defaults.joinToString("\n"))!!, false)
-        root.addView(urlsInput, LinearLayout.LayoutParams(-1, dp(160)))
+
+        root.addView(label("三、网络 URL 列表", 18f))
+        root.addView(label("每行一个 URL，可直接编辑、添加或删除。编辑时自动保存。", 13f))
+        urlsInput = edit("每行一个 HTTPS URL", prefs.getString("urls", defaults.joinToString("\\n"))!!, false)
+        root.addView(urlsInput, LinearLayout.LayoutParams(-1, dp(190)))
         urlsInput.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { saveSourceSettings() }
@@ -618,6 +648,8 @@ class MainActivity : Activity() {
         })
         localCheck.setOnCheckedChangeListener { _, _ -> saveSourceSettings() }
         networkCheck.setOnCheckedChangeListener { _, _ -> saveSourceSettings() }
+
+        root.addView(label("四、保存与返回", 18f))
         root.addView(button("保存网络 URL") {
             if (saveSourceSettings()) Toast.makeText(this, "URL 已保存", Toast.LENGTH_SHORT).show()
         })
