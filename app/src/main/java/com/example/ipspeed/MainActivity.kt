@@ -629,7 +629,7 @@ class MainActivity : Activity() {
                 val threshold = s?.toString()?.toDoubleOrNull() ?: return
                 if (threshold >= 0.5 && resultLines.isNotEmpty()) {
                     val visible = filterResults(resultLines, threshold)
-                    resultsView.text = if (visible.isEmpty()) "没有达到显示标准的结果" else visible.joinToString("\\n\\n")
+                    resultsView.text = if (visible.isEmpty()) "没有达到显示标准的结果" else visible.joinToString("\n")
                     status.text = "状态：结果筛选中；显示 ${visible.size} 条"
                 }
             }
