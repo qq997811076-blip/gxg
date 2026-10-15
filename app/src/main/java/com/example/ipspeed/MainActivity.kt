@@ -106,7 +106,7 @@ class MainActivity : Activity() {
                 geoRowsByIP = loadedRows
                 countryCodesByIP = loadedCountries
                 savedDataLoaded = true
-                if (::sourceStats.isInitialized) sourceStats.text = "已保存唯一 IPv4：\${importedIPs.size}"
+                if (::sourceStats.isInitialized) sourceStats.text = "已保存唯一 IPv4：${importedIPs.size}"
                 status.text = "状态：待开始"
             }
         }
@@ -774,7 +774,7 @@ class MainActivity : Activity() {
                     savedDataLoaded = true
                     if (!::sourceStats.isInitialized) showSources()
                     if (::sourceStats.isInitialized) {
-                        sourceStats.text = "本次文件重复：$duplicateCount；本次新增：\${finalIPs.size - previousIPs.size}；累计保存唯一 IPv4：\${finalIPs.size}"
+                        sourceStats.text = "本次文件重复：$duplicateCount；本次新增：${finalIPs.size - previousIPs.size}；累计保存唯一 IPv4：${finalIPs.size}"
                     }
                     if (::localCheck.isInitialized) localCheck.isChecked = finalIPs.isNotEmpty()
                     status.text = "状态：文件导入完成"
@@ -782,14 +782,14 @@ class MainActivity : Activity() {
                     val message = if (parsed.first.isEmpty()) {
                         "文件已读取，但没有识别到有效 IPv4；已有 IP 已保留"
                     } else {
-                        "累计导入完成：本次新增 $addedCount 个，累计保存 \${finalIPs.size} 个唯一 IPv4，重复 $duplicateCount 个"
+                        "累计导入完成：本次新增 $addedCount 个，累计保存 ${finalIPs.size} 个唯一 IPv4，重复 $duplicateCount 个"
                     }
                     Toast.makeText(this, message, Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
                 runOnUiThread {
                     status.text = "状态：文件导入失败"
-                    Toast.makeText(this, "读取文件失败：\${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "读取文件失败：${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
                 }
             }
         }
