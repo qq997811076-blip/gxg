@@ -232,18 +232,22 @@ func validateURL(raw string) error {
 func checkIP(ip, target string) (Result, bool) {
 	r := Result{IP: ip}
 
+	// 连通性/延迟阶段固定测试 Cloudflare trace；下载测速仍使用界面传入的 target。
+	const latencyTarget = "https://speed.cloudflare.com/cdn-cgi/trace"
+
 	ctx, cancel := context.WithTimeout(
 		context.Background(), connectTimeout,
 	)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(
-		ctx, http.MethodGet, target, nil,
+		ctx, http.MethodGet, latencyTarget, nil,
 	)
 	if err != nil {
 		return r, false
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("User-Agent", "IP-HTTP-Checker/1.0")
+	req.Header.Set("Connection", "close")
 
 	start := time.Now()
 	resp, err := makeClient(ip, connectTimeout).Do(req)
@@ -254,10 +258,7 @@ func checkIP(ip, target string) (Result, bool) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return r, false
-	}
-
+	// 收到任何 HTTP 响应即视为连通，不因 3xx、4xx 或 5xx 状态码直接判定失败。
 	return r, true
 }
 
