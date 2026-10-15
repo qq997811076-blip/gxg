@@ -1038,13 +1038,7 @@ class MainActivity : Activity() {
         val ipRegex = Regex("[0-9]{1,3}(?:\\.[0-9]{1,3}){3}")
 
         for ((lineIndex, line) in content.lineSequence().withIndex()) {
-            val ips = if (csv) {
-                ipRegex.findAll(line).mapNotNull { validIPv4(it.value) }.toList()
-            } else {
-                val trimmed = line.trimStart()
-                val match = Regex("^([0-9]{1,3}(?:\\.[0-9]{1,3}){3})").find(trimmed)
-                if (match == null) emptyList() else listOfNotNull(validIPv4(match.groupValues[1]))
-            }
+            val ips = parseImported(line, csv).first
             if (ips.isEmpty()) continue
             val country = countryCodeFromLine(
                 line,
@@ -1054,7 +1048,8 @@ class MainActivity : Activity() {
             for (ip in ips) {
                 // Do not persist a redundant metadata row for plain-IP TXT lines;
                 // large IP-only lists should not inflate SharedPreferences with tens of thousands of copies.
-                val hasExtraMetadata = csv || line.trim() != ip
+                val plainIPOrCIDRLine = Regex("^\\s*[0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?:/[0-9]{1,2})?\\s*$").matches(line)
+                val hasExtraMetadata = csv || !plainIPOrCIDRLine
                 if (hasExtraMetadata && (!rows.containsKey(ip) ||
                     (countries[ip].isNullOrBlank() && !country.isNullOrBlank()))) {
                     rows[ip] = line
@@ -1084,21 +1079,56 @@ class MainActivity : Activity() {
         }
     }
 
+    // 单个 CIDR 最多展开 1,048,576 个地址，避免 /8、/0 等超大网段一次性耗尽手机内存。
+    private val maxCIDRExpansion = 1_048_576L
+
+    private fun expandIPv4Token(token: String): List<String> {
+        val parts = token.split("/", limit = 2)
+        val baseIP = validIPv4(parts[0]) ?: return emptyList()
+        if (parts.size == 1) return listOf(baseIP)
+
+        val prefix = parts[1].toIntOrNull() ?: return emptyList()
+        if (prefix !in 0..32) return emptyList()
+
+        val octets = baseIP.split(".").map { it.toLong() }
+        val value = (octets[0] shl 24) or (octets[1] shl 16) or
+            (octets[2] shl 8) or octets[3]
+        val hostBits = 32 - prefix
+        val count = 1L shl hostBits
+        if (count > maxCIDRExpansion) {
+            throw IOException("CIDR 网段地址数量过大（$count），单个网段最多展开 $maxCIDRExpansion 个；请拆分成较小网段后导入")
+        }
+        val mask = if (prefix == 0) 0L else (0xFFFF_FFFFL shl hostBits) and 0xFFFF_FFFFL
+        val network = value and mask
+        val result = ArrayList<String>(count.toInt())
+        var current = network
+        repeat(count.toInt()) {
+            result.add(
+                listOf(
+                    (current ushr 24) and 255,
+                    (current ushr 16) and 255,
+                    (current ushr 8) and 255,
+                    current and 255
+                ).joinToString(".")
+            )
+            current++
+        }
+        return result
+    }
+
     private fun parseImported(content: String, csv: Boolean): Pair<List<String>, Int> {
         val found = mutableListOf<String>()
-        val regex = Regex("[0-9]{1,3}(?:\\.[0-9]{1,3}){3}")
+        val tokenRegex = Regex("(?<![0-9.])([0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?:/[0-9]{1,2})?)(?![0-9./])")
         for (line in content.lineSequence()) {
-            if (csv) {
-                for (match in regex.findAll(line)) {
-                    val ip = validIPv4(match.value)
-                    if (ip != null) found.add(ip)
-                }
+            val tokens = if (csv) {
+                tokenRegex.findAll(line).map { it.groupValues[1] }.toList()
             } else {
                 val trimmed = line.trimStart()
-                val match = Regex("^([0-9]{1,3}(?:\\.[0-9]{1,3}){3})").find(trimmed) ?: continue
-                val ip = validIPv4(match.groupValues[1])
-                if (ip != null) found.add(ip)
+                val match = Regex("^([0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?:/[0-9]{1,2})?)").find(trimmed)
+                    ?: continue
+                listOf(match.groupValues[1])
             }
+            for (token in tokens) found.addAll(expandIPv4Token(token))
         }
         val unique = linkedSetOf<String>()
         var duplicates = 0
