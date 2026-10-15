@@ -1048,7 +1048,7 @@ class MainActivity : Activity() {
             for (ip in ips) {
                 // Do not persist a redundant metadata row for plain-IP TXT lines;
                 // large IP-only lists should not inflate SharedPreferences with tens of thousands of copies.
-                val plainIPOrCIDRLine = Regex("^\\s*[0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?:/[0-9]{1,2})?\\s*$").matches(line)
+                val plainIPOrCIDRLine = Regex("^\\s*[0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?:\\s*/\\s*[0-9]{1,2})?\\s*$").matches(line)
                 val hasExtraMetadata = csv || !plainIPOrCIDRLine
                 if (hasExtraMetadata && (!rows.containsKey(ip) ||
                     (countries[ip].isNullOrBlank() && !country.isNullOrBlank()))) {
@@ -1083,7 +1083,8 @@ class MainActivity : Activity() {
     private val maxCIDRExpansion = 1_048_576L
 
     private fun expandIPv4Token(token: String): List<String> {
-        val parts = token.split("/", limit = 2)
+        val normalizedToken = token.trim().replace(Regex("\\s*/\\s*"), "/")
+        val parts = normalizedToken.split("/", limit = 2)
         val baseIP = validIPv4(parts[0]) ?: return emptyList()
         if (parts.size == 1) return listOf(baseIP)
 
@@ -1118,13 +1119,13 @@ class MainActivity : Activity() {
 
     private fun parseImported(content: String, csv: Boolean): Pair<List<String>, Int> {
         val found = mutableListOf<String>()
-        val tokenRegex = Regex("(?<![0-9.])([0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?:/[0-9]{1,2})?)(?![0-9./])")
+        val tokenRegex = Regex("(?<![0-9.])([0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?:\\s*/\\s*[0-9]{1,2})?)(?![0-9./])")
         for (line in content.lineSequence()) {
             val tokens = if (csv) {
                 tokenRegex.findAll(line).map { it.groupValues[1] }.toList()
             } else {
                 val trimmed = line.trimStart()
-                val match = Regex("^([0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?:/[0-9]{1,2})?)").find(trimmed)
+                val match = Regex("^([0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?:\\s*/\\s*[0-9]{1,2})?)").find(trimmed)
                     ?: continue
                 listOf(match.groupValues[1])
             }
