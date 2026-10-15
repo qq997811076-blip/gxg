@@ -90,15 +90,27 @@ class MainActivity : Activity() {
         "https://countrymerge.pages.dev/all.txt"
     )
 
+    private var savedDataLoaded = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        importedIPs = prefs.getString("imported_ips", "")!!
-            .lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.distinct().toList()
-        geoRowsByIP = readStringMap(prefs.getString("ip_geo_rows", "{}"))
-        countryCodesByIP = readStringMap(prefs.getString("ip_country_codes", "{}"))
         showMain()
+        status.text = "状态：正在加载本地数据…"
+        executor.execute {
+            val loadedIPs = prefs.getString("imported_ips", "").orEmpty()
+                .lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.distinct().toList()
+            val loadedRows = readStringMap(prefs.getString("ip_geo_rows", "{}"))
+            val loadedCountries = readStringMap(prefs.getString("ip_country_codes", "{}"))
+            runOnUiThread {
+                importedIPs = loadedIPs
+                geoRowsByIP = loadedRows
+                countryCodesByIP = loadedCountries
+                savedDataLoaded = true
+                if (::sourceStats.isInitialized) sourceStats.text = "已保存唯一 IPv4：\${importedIPs.size}"
+                status.text = "状态：待开始"
+            }
+        }
     }
-
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun makeRoot(): LinearLayout {
@@ -717,54 +729,69 @@ class MainActivity : Activity() {
             Toast.makeText(this, "文件选择器没有返回文件地址，请重新选择", Toast.LENGTH_LONG).show()
             return
         }
-        try {
-            // 兼容 Android 文档选择器返回的 content:// URI，并在读取期间保留可见反馈。
-            Toast.makeText(this, "正在读取所选文件…", Toast.LENGTH_SHORT).show()
-            val content = contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
-                ?: throw java.io.IOException("无法打开所选文件")
-            val name = queryName(uri).lowercase(Locale.ROOT)
-            val isCsv = name.endsWith(".csv") || content.lineSequence().firstOrNull()?.contains(",") == true
-            val parsed = parseImported(content, isCsv)
-            val geo = parseGeoMetadata(content, isCsv)
+        Toast.makeText(this, "已选择文件，正在后台读取和识别 IP…", Toast.LENGTH_LONG).show()
+        status.text = "状态：正在导入文件，请稍候"
+        executor.execute {
+            try {
+                val content = contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                    ?: throw java.io.IOException("无法打开所选文件")
+                val name = queryName(uri).lowercase(Locale.ROOT)
+                val isCsv = name.endsWith(".csv") || content.lineSequence().firstOrNull()?.contains(",") == true
+                val parsed = parseImported(content, isCsv)
+                val geo = parseGeoMetadata(content, isCsv)
 
-            // 累计导入：保留旧 IP，并将本次文件的新 IP 追加到末尾。
-            val previousIPs = importedIPs
-            val previousIPSet = previousIPs.toHashSet()
-            val overlaps = parsed.first.count { it in previousIPSet }
-            val duplicateCount = parsed.second + overlaps
-            val mergedIPs = linkedSetOf<String>().apply {
-                addAll(previousIPs)
-                addAll(parsed.first)
+                val previousIPs = importedIPs
+                val previousIPSet = previousIPs.toHashSet()
+                val overlaps = parsed.first.count { it in previousIPSet }
+                val duplicateCount = parsed.second + overlaps
+                val mergedIPs = linkedSetOf<String>().apply {
+                    addAll(previousIPs)
+                    addAll(parsed.first)
+                }
+
+                val mergedRows = geoRowsByIP.toMutableMap()
+                val mergedCountries = countryCodesByIP.toMutableMap()
+                mergeGeoMetadata(mergedRows, mergedCountries, geo)
+                val finalIPs = mergedIPs.toList()
+                val finalRows = mergedRows.filterKeys { it in mergedIPs }
+                val finalCountries = mergedCountries.filterKeys { it in mergedIPs }
+
+                prefs.edit()
+                    .putString("imported_ips", finalIPs.joinToString("\n"))
+                    .putBoolean("localEnabled", finalIPs.isNotEmpty())
+                    .putString("ip_geo_rows", org.json.JSONObject().apply {
+                        finalRows.forEach { (ip, row) -> put(ip, row) }
+                    }.toString())
+                    .putString("ip_country_codes", org.json.JSONObject().apply {
+                        finalCountries.forEach { (ip, code) -> put(ip, code) }
+                    }.toString())
+                    .apply()
+
+                runOnUiThread {
+                    importedIPs = finalIPs
+                    geoRowsByIP = finalRows
+                    countryCodesByIP = finalCountries
+                    savedDataLoaded = true
+                    if (!::sourceStats.isInitialized) showSources()
+                    if (::sourceStats.isInitialized) {
+                        sourceStats.text = "本次文件重复：$duplicateCount；本次新增：\${finalIPs.size - previousIPs.size}；累计保存唯一 IPv4：\${finalIPs.size}"
+                    }
+                    if (::localCheck.isInitialized) localCheck.isChecked = finalIPs.isNotEmpty()
+                    status.text = "状态：文件导入完成"
+                    val addedCount = finalIPs.size - previousIPs.size
+                    val message = if (parsed.first.isEmpty()) {
+                        "文件已读取，但没有识别到有效 IPv4；已有 IP 已保留"
+                    } else {
+                        "累计导入完成：本次新增 $addedCount 个，累计保存 \${finalIPs.size} 个唯一 IPv4，重复 $duplicateCount 个"
+                    }
+                    Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    status.text = "状态：文件导入失败"
+                    Toast.makeText(this, "读取文件失败：\${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                }
             }
-
-            // 保留已有地理信息和国家代码；旧记录缺失时用新文件的信息补齐。
-            val mergedRows = geoRowsByIP.toMutableMap()
-            val mergedCountries = countryCodesByIP.toMutableMap()
-            mergeGeoMetadata(mergedRows, mergedCountries, geo)
-
-            importedIPs = mergedIPs.toList()
-            geoRowsByIP = mergedRows.filterKeys { importedIPs.contains(it) }
-            countryCodesByIP = mergedCountries.filterKeys { importedIPs.contains(it) }
-
-            prefs.edit()
-                .putString("imported_ips", importedIPs.joinToString("\n"))
-                .putBoolean("localEnabled", importedIPs.isNotEmpty())
-                .apply()
-            saveGeoMetadata()
-            if (!::sourceStats.isInitialized) {
-                showSources()
-            }
-            localCheck.isChecked = importedIPs.isNotEmpty()
-            val addedCount = importedIPs.size - previousIPs.size
-            sourceStats.text = "本次文件重复：$duplicateCount；本次新增：$addedCount；累计保存唯一 IPv4：${importedIPs.size}"
-            val message = if (parsed.first.isEmpty()) {
-                "文件已读取，但没有识别到有效 IPv4；已有 IP 已保留"
-            } else {
-                "累计导入完成：本次新增 $addedCount 个，累计保存 ${importedIPs.size} 个唯一 IPv4，重复 $duplicateCount 个"
-            }
-            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "读取文件失败：${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -922,8 +949,8 @@ class MainActivity : Activity() {
     }
 
     private fun parseGeoMetadata(content: String, csv: Boolean): GeoMetadata {
-        val lines = content.lineSequence().toList()
-        val headers = if (csv) lines.firstOrNull()?.let { splitCsvFields(it) } else null
+        val firstLine = content.lineSequence().firstOrNull()
+        val headers = if (csv) firstLine?.let { splitCsvFields(it) } else null
         val countryAliases = setOf(
             "country", "country_code", "countrycode", "country_iso", "country_iso2",
             "country_iso_code", "iso2", "iso_2", "iso_alpha2", "iso-alpha2", "cc"
@@ -935,7 +962,7 @@ class MainActivity : Activity() {
         val countries = linkedMapOf<String, String>()
         val ipRegex = Regex("[0-9]{1,3}(?:\\.[0-9]{1,3}){3}")
 
-        for ((lineIndex, line) in lines.withIndex()) {
+        for ((lineIndex, line) in content.lineSequence().withIndex()) {
             val ips = if (csv) {
                 ipRegex.findAll(line).mapNotNull { validIPv4(it.value) }.toList()
             } else {
@@ -1004,6 +1031,10 @@ class MainActivity : Activity() {
     }
 
     private fun startTest() {
+        if (!savedDataLoaded) {
+            Toast.makeText(this, "本地 IP 数据仍在加载，请稍候", Toast.LENGTH_SHORT).show()
+            return
+        }
         if (process != null) {
             Toast.makeText(this, "测速正在运行", Toast.LENGTH_SHORT).show()
             return
