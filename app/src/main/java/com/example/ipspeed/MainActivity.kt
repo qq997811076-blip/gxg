@@ -523,13 +523,18 @@ class MainActivity : Activity() {
 
         root.addView(label("二、IP 来源", 18f))
         root.addView(label("本地文件导入", 15f))
-        root.addView(button("选择 TXT / CSV 文件") {
+        val localImportRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        localImportRow.addView(button("选择 TXT / CSV 文件") {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = "*/*"
             }
             startActivityForResult(intent, 701)
-        })
+        }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
+        localImportRow.addView(button("剪切板导入IP") {
+            importIPsFromClipboard()
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        root.addView(localImportRow)
         sourceStats = label("已保存唯一 IPv4：${importedIPs.size}", 14f)
         root.addView(sourceStats)
         root.addView(button("清除已导入的本地 IP") {
@@ -658,13 +663,18 @@ class MainActivity : Activity() {
 
         root.addView(label("一、本地 IP 文件", 18f))
         root.addView(label("TXT：忽略行首空白，只保留行首 IPv4；CSV：从字段中提取 IPv4。保留同一行的地理信息用于结果显示；IPv6 不支持。", 13f))
-        root.addView(button("选择 TXT / CSV 文件") {
+        val localImportRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        localImportRow.addView(button("选择 TXT / CSV 文件") {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = "*/*"
             }
             startActivityForResult(intent, 701)
-        })
+        }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
+        localImportRow.addView(button("剪切板导入IP") {
+            importIPsFromClipboard()
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        root.addView(localImportRow)
         sourceStats = label("有效唯一 IPv4：${importedIPs.size}；重复数量：—", 14f)
         root.addView(sourceStats)
         root.addView(button("清除已导入的本地 IP") {
@@ -717,6 +727,71 @@ class MainActivity : Activity() {
     }
 
     @Deprecated("Deprecated in Android API, retained for broad compatibility")
+    private fun importIPsFromClipboard() {
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val clip = clipboard.primaryClip
+        if (clip == null || clip.itemCount == 0) {
+            Toast.makeText(this, "剪切板为空", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val text = clip.getItemAt(0).coerceToText(this)?.toString().orEmpty()
+        if (text.isBlank()) {
+            Toast.makeText(this, "剪切板没有可导入的文本", Toast.LENGTH_SHORT).show()
+            return
+        }
+        status.text = "状态：正在从剪切板导入 IP"
+        Toast.makeText(this, "正在读取剪切板并识别 IPv4…", Toast.LENGTH_SHORT).show()
+        executor.execute {
+            try {
+                val parsed = parseImported(text, false)
+                val previousIPs = importedIPs
+                val previousIPSet = previousIPs.toHashSet()
+                val overlaps = parsed.first.count { it in previousIPSet }
+                val duplicateCount = parsed.second + overlaps
+                val mergedIPs = linkedSetOf<String>().apply {
+                    addAll(previousIPs)
+                    addAll(parsed.first)
+                }
+                val finalIPs = mergedIPs.toList()
+                val finalRows = geoRowsByIP.filterKeys { it in mergedIPs }
+                val finalCountries = countryCodesByIP.filterKeys { it in mergedIPs }
+                prefs.edit()
+                    .putString("imported_ips", finalIPs.joinToString("\n"))
+                    .putBoolean("localEnabled", finalIPs.isNotEmpty())
+                    .putString("ip_geo_rows", org.json.JSONObject().apply {
+                        finalRows.forEach { (ip, row) -> put(ip, row) }
+                    }.toString())
+                    .putString("ip_country_codes", org.json.JSONObject().apply {
+                        finalCountries.forEach { (ip, code) -> put(ip, code) }
+                    }.toString())
+                    .apply()
+                runOnUiThread {
+                    importedIPs = finalIPs
+                    geoRowsByIP = finalRows
+                    countryCodesByIP = finalCountries
+                    savedDataLoaded = true
+                    if (::sourceStats.isInitialized) {
+                        sourceStats.text = "剪切板重复：${duplicateCount}；本次新增：${finalIPs.size - previousIPs.size}；累计保存唯一 IPv4：${finalIPs.size}"
+                    }
+                    if (::localCheck.isInitialized) localCheck.isChecked = finalIPs.isNotEmpty()
+                    status.text = "状态：剪切板导入完成"
+                    val addedCount = finalIPs.size - previousIPs.size
+                    val message = if (parsed.first.isEmpty()) {
+                        "剪切板中没有识别到有效 IPv4；已有 IP 已保留"
+                    } else {
+                        "剪切板导入完成：新增 ${addedCount} 个，累计 ${finalIPs.size} 个唯一 IPv4，重复 ${duplicateCount} 个"
+                    }
+                    Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    status.text = "状态：剪切板导入失败"
+                    Toast.makeText(this, "剪切板导入失败：${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != 701) return
