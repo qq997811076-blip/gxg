@@ -977,8 +977,11 @@ class MainActivity : Activity() {
                 if (lineIndex == 0 && countryIndex != null) null else countryIndex
             )
             for (ip in ips) {
-                if (!rows.containsKey(ip) ||
-                    (countries[ip].isNullOrBlank() && !country.isNullOrBlank())) {
+                // Do not persist a redundant metadata row for plain-IP TXT lines;
+                // large IP-only lists should not inflate SharedPreferences with tens of thousands of copies.
+                val hasExtraMetadata = csv || line.trim() != ip
+                if (hasExtraMetadata && (!rows.containsKey(ip) ||
+                    (countries[ip].isNullOrBlank() && !country.isNullOrBlank()))) {
                     rows[ip] = line
                 }
                 if (countries[ip].isNullOrBlank() && !country.isNullOrBlank()) {
