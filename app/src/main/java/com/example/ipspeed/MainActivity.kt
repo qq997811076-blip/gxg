@@ -1170,6 +1170,15 @@ class MainActivity : Activity() {
 
         val localEnabled = prefs.getBoolean("localEnabled", true)
         val networkEnabled = prefs.getBoolean("networkEnabled", true)
+        val clipboardText = if (localEnabled) {
+            try {
+                val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                val clip = clipboard.primaryClip
+                if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(this)?.toString().orEmpty() else ""
+            } catch (_: Exception) {
+                ""
+            }
+        } else ""
         val urls = prefs.getString("urls", defaults.joinToString("\n"))!!
             .lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
         if (!localEnabled && !networkEnabled) {
@@ -1211,7 +1220,11 @@ class MainActivity : Activity() {
                 // 再次规范化本地保存内容，防止旧版本保存的重复/非规范 IP 混入测速。
                 val mergedIPs = linkedSetOf<String>()
                 if (localEnabled) {
-                    val localUnique = parseImported(importedIPs.joinToString("\n"), false).first
+                    val clipboardParsed = if (clipboardText.isNotBlank()) parseImported(clipboardText, false).first else emptyList()
+                    val localUnique = linkedSetOf<String>().apply {
+                        addAll(parseImported(importedIPs.joinToString("\n"), false).first)
+                        addAll(clipboardParsed)
+                    }.toList()
                     mergedIPs.addAll(localUnique)
                     for (ip in localUnique) {
                         savedGeoRows[ip]?.let { runGeoRows[ip] = it }
