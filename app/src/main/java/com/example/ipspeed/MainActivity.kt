@@ -628,7 +628,7 @@ class MainActivity : Activity() {
             )
             setOnCheckedChangeListener { _, checked ->
                 prefs.edit().putBoolean("official_source_enabled", checked).commit()
-                Toast.makeText(this, if (checked) "已启用官方 IPv4 来源" else "已恢复原有 IP 来源", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, if (checked) "已启用官方 IPv4 来源" else "已恢复原有 IP 来源", Toast.LENGTH_SHORT).show()
             }
         }, LinearLayout.LayoutParams(-2, -2))
         root.addView(operationHeader)
