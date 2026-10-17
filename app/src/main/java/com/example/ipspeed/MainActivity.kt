@@ -93,6 +93,23 @@ class MainActivity : Activity() {
 
     private var savedDataLoaded = false
 
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (ev.action == android.view.MotionEvent.ACTION_DOWN) {
+            val focused = currentFocus
+            if (focused is EditText) {
+                val bounds = android.graphics.Rect()
+                focused.getGlobalVisibleRect(bounds)
+                val tappedInsideInput = bounds.contains(ev.rawX.toInt(), ev.rawY.toInt())
+                if (!tappedInsideInput) {
+                    (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)
+                        ?.hideSoftInputFromWindow(focused.windowToken, 0)
+                    focused.clearFocus()
+                }
+            }
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         showMain()
