@@ -584,6 +584,54 @@ func addLocation(code string, loc locationInfo) {
 
 var upstreamHTTPClient = &http.Client{Timeout: 20 * time.Second}
 
+// 官方 IPv4 来源单独使用公共 DNS 解析，避免 Android/Termux 环境中的
+// 本地 DNS 被错误指向 [::1]:53 时，官方列表下载直接失败。
+func getOfficialIPv4ListContent() (string, error) {
+	const filename = "ips-v4.txt"
+	if _, err := os.Stat(filename); err == nil {
+		return getFileContent(filename)
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			dialer := &net.Dialer{Timeout: 5 * time.Second}
+			return dialer.DialContext(ctx, network, "1.1.1.1:53")
+		},
+	}
+	dialer := &net.Dialer{Timeout: 10 * time.Second, Resolver: resolver}
+	client := &http.Client{
+		Timeout: 20 * time.Second,
+		Transport: &http.Transport{
+			DialContext: dialer.DialContext,
+		},
+	}
+	req, err := http.NewRequest(http.MethodGet, "https://www.baipiao.eu.org/cloudflare/ips-v4", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("官方 IPv4 列表请求失败: %s", resp.Status)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	content := string(data)
+	if err := saveToFile(filename, content); err != nil {
+		fmt.Println("保存官方 IPv4 列表缓存失败:", err)
+	}
+	return content, nil
+}
+
 func getIPListContent(filename, apiURL string) (string, error) {
 	if _, err := os.Stat(filename); os.IsNotExist(err) {
 		content, err := getURLContent(apiURL)
@@ -814,7 +862,7 @@ func getRandomIPv4s(ipList []string) []string {
 }
 
 func loadOfficialIPv4IPs() ([]string, error) {
-	content, err := getIPListContent("ips-v4.txt", "https://www.baipiao.eu.org/cloudflare/ips-v4")
+	content, err := getOfficialIPv4ListContent()
 	if err != nil {
 		return nil, err
 	}
