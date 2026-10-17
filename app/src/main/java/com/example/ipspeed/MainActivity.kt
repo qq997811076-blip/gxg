@@ -545,7 +545,7 @@ class MainActivity : Activity() {
                 targetInput.isFocusableInTouchMode = true
                 targetInput.isCursorVisible = true
                 if (clearCustomInput) targetInput.setText("")
-                targetInput.requestFocus()
+                // Do not steal focus when restoring the saved manual URL on app launch.
                 targetInput.setSelection(targetInput.text.length)
             }
         }
@@ -678,7 +678,9 @@ class MainActivity : Activity() {
                 lastTargetPresetPosition = position
                 setTargetPreset(position, clearCustomInput = position == 4 && previousPosition != 4)
                 saveMainSettings()
-                if (position == 4) {
+                // Focus/show the keyboard only when the user switches to manual input.
+                // On initial page restoration, keep the saved URL but leave the field unfocused.
+                if (position == 4 && previousPosition != 4) {
                     targetInput.post {
                         targetInput.requestFocus()
                         targetInput.setSelection(targetInput.text.length)
