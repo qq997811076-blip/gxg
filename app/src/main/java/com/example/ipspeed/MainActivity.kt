@@ -1320,7 +1320,7 @@ class MainActivity : Activity() {
                     val speed = baseLine.substringAfter("#").removeSuffix("M")
                     val colo = fields.getOrNull(1).orEmpty().ifBlank { "UNK" }
                     val mappedCountry = fields.getOrNull(2).orEmpty()
-                    val country = mappedCountry.ifBlank { runCountryCodes[ip].orEmpty() }.ifBlank { "XX" }
+                    val country = mappedCountry.ifBlank { "XX" }
                     "$ip:443#$colo-$country-${speed}MB/s"
                 }
                 val dcStats = parsedRaw.map { raw ->
@@ -1328,7 +1328,7 @@ class MainActivity : Activity() {
                     val baseLine = fields[0]
                     val ip = baseLine.substringBefore("#")
                     val colo = fields.getOrNull(1).orEmpty().ifBlank { "UNK" }
-                    val country = fields.getOrNull(2).orEmpty().ifBlank { runCountryCodes[ip].orEmpty() }.ifBlank { "XX" }
+                    val country = fields.getOrNull(2).orEmpty().ifBlank { "XX" }
                     val latency = fields.getOrNull(3)?.toLongOrNull() ?: Long.MAX_VALUE
                     val region = fields.getOrNull(4).orEmpty()
                     val city = fields.getOrNull(5).orEmpty()
