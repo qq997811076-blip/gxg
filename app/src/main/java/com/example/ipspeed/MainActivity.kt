@@ -1334,8 +1334,10 @@ class MainActivity : Activity() {
         val binary = File(filesDir, "sss")
         val ipFile = File(filesDir, "ips.txt")
         try {
-            if (!binary.exists()) assets.open("sss").use { input ->
-                FileOutputStream(binary).use { output -> input.copyTo(output) }
+            // 每次启动测速都用 APK 内当前版本覆盖私有目录中的旧核心。
+            // 否则升级 APK 后，filesDir/sss 仍可能保留旧版，导致 official 被当成普通 URL。
+            assets.open("sss").use { input ->
+                FileOutputStream(binary, false).use { output -> input.copyTo(output) }
             }
             binary.setExecutable(true, true)
         } catch (e: Exception) {
