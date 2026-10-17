@@ -608,7 +608,35 @@ class MainActivity : Activity() {
         root.addView(label("IP 测速", 26f))
         root.addView(label("测速参数、IP 来源、上传方式集中管理", 13f))
 
-        root.addView(label("一、测速参数", 18f))
+        root.addView(label("一、测速操作", 18f))
+        val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        controls.addView(button("开始测速") { startTest() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
+        controls.addView(button("停止测速") { stopTest() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
+        root.addView(controls)
+
+        val resultHeaderRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        resultHeaderRow.addView(label("二、测速结果", 18f), LinearLayout.LayoutParams(0, -2, 1f))
+        resultHeaderRow.addView(button("复制当前结果") { copyResults() }, LinearLayout.LayoutParams(-2, -2))
+        root.addView(resultHeaderRow)
+        status = label("状态：待开始", 14f)
+        status.setPadding(0, dp(2), 0, dp(8))
+        root.addView(status)
+        root.addView(label("合格结果（按速度从高到低）", 16f))
+        resultsView = label("暂无结果")
+        resultsView.textSize = 14f
+        resultsView.setPadding(dp(12), dp(12), dp(12), dp(12))
+        resultsView.setBackgroundColor(0xFFF1F3F4.toInt())
+        root.addView(resultsView, LinearLayout.LayoutParams(-1, dp(320)))
+        root.addView(label("数据中心汇总", 16f))
+        dataCenterSummaryView = label("暂无数据中心统计", 13f)
+        dataCenterSummaryView.setPadding(dp(12), dp(8), dp(12), dp(8))
+        root.addView(dataCenterSummaryView)
+
+
+        root.addView(label("三、测速参数", 18f))
         val savedTarget = prefs.getString("target", defaultTargetUrl).orEmpty()
         val savedPreset = prefs.getString("targetPreset", inferTargetPreset(savedTarget)).orEmpty()
         targetInput = edit("HTTPS 测速地址", savedTarget.ifBlank { defaultTargetUrl })
@@ -691,7 +719,7 @@ class MainActivity : Activity() {
         filterRow.addView(thresholdBox, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(filterRow)
 
-        root.addView(label("二、IP 来源", 18f))
+        root.addView(label("四、IP 来源", 18f))
         root.addView(label("本地文件导入", 15f))
         val localImportRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         localImportRow.addView(button("选择 TXT / CSV 文件") {
@@ -737,13 +765,7 @@ class MainActivity : Activity() {
         localCheck.setOnCheckedChangeListener { _, _ -> saveSourceSettings() }
         networkCheck.setOnCheckedChangeListener { _, _ -> saveSourceSettings() }
 
-        root.addView(label("三、测速操作", 18f))
-        val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        controls.addView(button("开始测速") { startTest() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
-        controls.addView(button("停止测速") { stopTest() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
-        root.addView(controls)
-
-        root.addView(label("四、GitHub 上传", 18f))
+        root.addView(label("五、GitHub 上传", 18f))
         root.addView(button("账号与仓库设置") { showGitHubSettings() })
         root.addView(label("上传方式", 15f))
         githubModeGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
@@ -791,27 +813,6 @@ class MainActivity : Activity() {
             setOnCheckedChangeListener { _, checked -> setAutoUploadEnabled(checked) }
         }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) })
         root.addView(uploadActions)
-
-        val resultHeaderRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        resultHeaderRow.addView(label("五、测速结果", 18f), LinearLayout.LayoutParams(0, -2, 1f))
-        resultHeaderRow.addView(button("复制当前结果") { copyResults() }, LinearLayout.LayoutParams(-2, -2))
-        root.addView(resultHeaderRow)
-        status = label("状态：待开始", 14f)
-        status.setPadding(0, dp(2), 0, dp(8))
-        root.addView(status)
-        root.addView(label("合格结果（按速度从高到低）", 16f))
-        resultsView = label("暂无结果")
-        resultsView.textSize = 14f
-        resultsView.setPadding(dp(12), dp(12), dp(12), dp(12))
-        resultsView.setBackgroundColor(0xFFF1F3F4.toInt())
-        root.addView(resultsView, LinearLayout.LayoutParams(-1, dp(320)))
-        root.addView(label("数据中心汇总", 16f))
-        dataCenterSummaryView = label("暂无数据中心统计", 13f)
-        dataCenterSummaryView.setPadding(dp(12), dp(8), dp(12), dp(8))
-        root.addView(dataCenterSummaryView)
 
         listOf(targetInput, connectInput, downloadInput, topNInput, thresholdInput).forEach { attachMainAutoSave(it) }
         thresholdInput.addTextChangedListener(object : android.text.TextWatcher {
