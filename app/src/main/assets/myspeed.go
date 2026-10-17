@@ -511,7 +511,7 @@ func initDataCenterLocations() {
 		}
 		if err == nil && len(data) > 0 {
 			if writeErr := os.WriteFile(filename, data, 0644); writeErr != nil {
-				fmt.Printf("数据中心映射缓存写入失败：%v\\n", writeErr)
+				fmt.Printf("数据中心映射缓存写入失败：%v\n", writeErr)
 			}
 		}
 	}
@@ -526,7 +526,7 @@ func initDataCenterLocations() {
 			locationsByIATA[code] = loc
 		}
 	}
-	fmt.Printf("数据中心映射已加载：%d 条\\n", len(locationsByIATA))
+	fmt.Printf("数据中心映射已加载：%d 条\n", len(locationsByIATA))
 }
 
 func main() {
