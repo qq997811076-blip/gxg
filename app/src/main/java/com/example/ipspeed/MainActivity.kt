@@ -13,6 +13,7 @@ import android.text.InputType
 import android.util.Base64
 import android.view.Gravity
 import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -20,6 +21,7 @@ import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import java.io.File
@@ -77,6 +79,9 @@ class MainActivity : Activity() {
     private lateinit var resultsView: TextView
     private lateinit var dataCenterSummaryView: TextView
     private lateinit var targetInput: EditText
+    private lateinit var targetPresetSpinner: Spinner
+    private var updatingTargetPreset = false
+    private var lastTargetPresetPosition = -1
     private lateinit var connectInput: EditText
     private lateinit var downloadInput: EditText
     private lateinit var topNInput: EditText
@@ -90,6 +95,13 @@ class MainActivity : Activity() {
         "https://zip.cm.edu.kg/all.txt",
         "https://countrymerge.pages.dev/all.txt"
     )
+
+    private val targetPresetLabels = arrayOf("自动选择", "Cloudflare", "CM提供", "移动专属", "手动输入")
+    private val autoTargetLabel = "自动选择"
+    private val defaultTargetUrl = "https://speed.cloudflare.com/__down?bytes=50000000"
+    private val cloudflareTargetUrl = "https://speed.cloudflare.com/__down?bytes=99999999"
+    private val cmTargetUrl = "https://cf.090227.xyz/__down?bytes=99999999"
+    private val mobileTargetUrl = "https://speed.okl.abrdns.com"
 
     private var savedDataLoaded = false
 
@@ -470,10 +482,91 @@ class MainActivity : Activity() {
         })
     }
 
+    private fun currentTargetPreset(): String =
+        if (::targetPresetSpinner.isInitialized) {
+            when (targetPresetSpinner.selectedItemPosition) {
+                0 -> "auto"
+                1 -> "cloudflare"
+                2 -> "cm"
+                3 -> "mobile"
+                else -> "custom"
+            }
+        } else {
+            prefs.getString("targetPreset", "auto").orEmpty()
+        }
+
+    private fun resolveTargetUrlForCore(): String {
+        return when (currentTargetPreset()) {
+            "auto" -> defaultTargetUrl
+            else -> targetInput.text.toString().trim()
+        }
+    }
+
+    private fun inferTargetPreset(savedTarget: String): String {
+        return when (savedTarget.trim()) {
+            "", defaultTargetUrl -> "auto"
+            cloudflareTargetUrl -> "cloudflare"
+            cmTargetUrl -> "cm"
+            mobileTargetUrl -> "mobile"
+            else -> "custom"
+        }
+    }
+
+    private fun setTargetPreset(position: Int, clearCustomInput: Boolean = false) {
+        if (!::targetPresetSpinner.isInitialized || !::targetInput.isInitialized) return
+        updatingTargetPreset = true
+        when (position) {
+            0 -> {
+                targetInput.setText(autoTargetLabel)
+                targetInput.isFocusable = false
+                targetInput.isFocusableInTouchMode = false
+                targetInput.isCursorVisible = false
+            }
+            1 -> {
+                targetInput.isFocusable = true
+                targetInput.isFocusableInTouchMode = true
+                targetInput.isCursorVisible = true
+                targetInput.setText(cloudflareTargetUrl)
+            }
+            2 -> {
+                targetInput.isFocusable = true
+                targetInput.isFocusableInTouchMode = true
+                targetInput.isCursorVisible = true
+                targetInput.setText(cmTargetUrl)
+            }
+            3 -> {
+                targetInput.isFocusable = true
+                targetInput.isFocusableInTouchMode = true
+                targetInput.isCursorVisible = true
+                targetInput.setText(mobileTargetUrl)
+            }
+            else -> {
+                targetInput.isFocusable = true
+                targetInput.isFocusableInTouchMode = true
+                targetInput.isCursorVisible = true
+                if (clearCustomInput) targetInput.setText("")
+                targetInput.requestFocus()
+                targetInput.setSelection(targetInput.text.length)
+            }
+        }
+        updatingTargetPreset = false
+        prefs.edit()
+            .putString("targetPreset", currentTargetPreset())
+            .putString("target", resolveTargetUrlForCore())
+            .commit()
+    }
+
+    private fun resetTargetPreset() {
+        targetPresetSpinner.setSelection(0)
+        setTargetPreset(0)
+        Toast.makeText(this, "测速网址已恢复自动选择", Toast.LENGTH_SHORT).show()
+    }
+
     private fun saveMainSettings(): Boolean {
         return try {
             val ok = prefs.edit()
-                .putString("target", targetInput.text.toString())
+                .putString("target", resolveTargetUrlForCore())
+                .putString("targetPreset", currentTargetPreset())
                 .putString("connectN", connectInput.text.toString())
                 .putString("downloadN", downloadInput.text.toString())
                 .putString("topN", topNInput.text.toString())
@@ -516,12 +609,71 @@ class MainActivity : Activity() {
         root.addView(label("测速参数、IP 来源、上传方式集中管理", 13f))
 
         root.addView(label("一、测速参数", 18f))
-        targetInput = edit("HTTPS 测速地址", prefs.getString("target", "https://speed.cloudflare.com/__down?bytes=50000000")!!)
+        val savedTarget = prefs.getString("target", defaultTargetUrl).orEmpty()
+        val savedPreset = prefs.getString("targetPreset", inferTargetPreset(savedTarget)).orEmpty()
+        targetInput = edit("HTTPS 测速地址", savedTarget.ifBlank { defaultTargetUrl })
+        targetPresetSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_item,
+                targetPresetLabels
+            ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        }
+        val initialPresetPosition = when (savedPreset) {
+            "cloudflare" -> 1
+            "cm" -> 2
+            "mobile" -> 3
+            "custom" -> 4
+            else -> 0
+        }
+        targetPresetSpinner.setSelection(initialPresetPosition, false)
+        lastTargetPresetPosition = initialPresetPosition
+        setTargetPreset(initialPresetPosition, clearCustomInput = false)
         connectInput = edit("连通性并发数", prefs.getString("connectN", "300")!!)
         downloadInput = edit("下载测速并发数", prefs.getString("downloadN", "100")!!)
         topNInput = edit("参与下载测速的低延迟 IP 数量", prefs.getString("topN", "20")!!)
         thresholdInput = edit("最低显示速度（MiB/s）", prefs.getString("threshold", "0.5")!!)
-        addField("测速地址（HTTPS）", targetInput)
+        root.addView(label("测速网址", 14f))
+        val targetRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        targetRow.addView(targetPresetSpinner, LinearLayout.LayoutParams(0, -2, 1.15f).apply { marginEnd = dp(5) })
+        targetRow.addView(targetInput, LinearLayout.LayoutParams(0, -2, 2f).apply { marginEnd = dp(5) })
+        targetRow.addView(button("↺") { resetTargetPreset() }, LinearLayout.LayoutParams(dp(48), -2))
+        root.addView(targetRow, LinearLayout.LayoutParams(-1, -2))
+        targetPresetSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (updatingTargetPreset) return
+                val previousPosition = lastTargetPresetPosition
+                lastTargetPresetPosition = position
+                setTargetPreset(position, clearCustomInput = position == 4 && previousPosition != 4)
+                saveMainSettings()
+                if (position == 4) {
+                    targetInput.post {
+                        targetInput.requestFocus()
+                        targetInput.setSelection(targetInput.text.length)
+                        (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)
+                            ?.showSoftInput(targetInput, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                    }
+                }
+            }
+        }
+        targetInput.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (!updatingTargetPreset && targetPresetSpinner.selectedItemPosition != 4) {
+                    updatingTargetPreset = true
+                    lastTargetPresetPosition = 4
+                    targetPresetSpinner.setSelection(4)
+                    updatingTargetPreset = false
+                    prefs.edit().putString("targetPreset", "custom").commit()
+                }
+                if (!updatingTargetPreset) saveMainSettings()
+            }
+            override fun afterTextChanged(s: android.text.Editable?) {}
+        })
         val concurrencyRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val connectBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         connectBox.addView(label("连通性并发数", 14f)); connectBox.addView(connectInput)
@@ -1130,7 +1282,7 @@ class MainActivity : Activity() {
             Toast.makeText(this, "测速正在运行", Toast.LENGTH_SHORT).show()
             return
         }
-        val target = targetInput.text.toString().trim()
+        val target = resolveTargetUrlForCore()
         val connectN = connectInput.text.toString().trim().toIntOrNull()
         val downloadN = downloadInput.text.toString().trim().toIntOrNull()
         val topN = topNInput.text.toString().trim().toIntOrNull()
@@ -1144,6 +1296,7 @@ class MainActivity : Activity() {
 
         prefs.edit()
             .putString("target", target)
+            .putString("targetPreset", currentTargetPreset())
             .putString("connectN", connectN.toString())
             .putString("downloadN", downloadN.toString())
             .putString("topN", topN.toString())
