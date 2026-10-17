@@ -25,7 +25,6 @@ import (
 const (
 	testDuration     = 10 * time.Second
 	idleTimeout      = 3 * time.Second
-	downloadLimit    int64 = 50 * 1024 * 1024
 	readBufferSize         = 32 * 1024
 	minDownloadBytes int64 = 64 * 1024
 	minMeasureTime         = 100 * time.Millisecond
@@ -33,6 +32,8 @@ const (
 	connectTimeout         = 5 * time.Second
 	sourceTimeout          = 60 * time.Second
 )
+
+var downloadLimit int64 = 50 * 1024 * 1024
 
 type locationInfo struct {
 	IATA   string  `json:"iata"`
@@ -882,10 +883,9 @@ func loadOfficialIPv4IPs() ([]string, error) {
 func main() {
 	initDataCenterLocations()
 	if len(os.Args) < 5 {
-		fmt.Println("用法：./sss 测速地址 连通性并发数 下载测速并发数 延迟最低IP数量 [no [IP来源URL...]]")
+		fmt.Println("用法：./sss 测速地址 连通性并发数 下载测速并发数 延迟最低IP数量 [no [下载上限字节数 [official|IP来源URL...]]]")
 		fmt.Println("默认示例：./sss https://cesu.dxgees.ggff.net 300 100 20")
-		fmt.Println("指定来源：./sss https://cesu.dxgees.ggff.net 300 100 20 no https://example.com/ip1.txt https://example.com/ip2.txt")
-		fmt.Println("仅本地文件：./sss https://cesu.dxgees.ggff.net 300 100 20 no")
+		fmt.Println("仅本地文件：./sss https://cesu.dxgees.ggff.net 300 100 20 no 1048576")
 		os.Exit(1)
 	}
 
@@ -897,6 +897,7 @@ func main() {
 	customSourceMode := false
 	officialSourceMode := false
 	var customSourceURLs []string
+	sourceArgStart := 6
 
 	if len(os.Args) > 5 {
 		if os.Args[5] != "no" {
@@ -904,11 +905,23 @@ func main() {
 			os.Exit(1)
 		}
 
-		if len(os.Args) > 6 && os.Args[6] == "official" {
+		// 新版 APK 在 no 后传入实际下载字节上限；旧版命令仍兼容。
+		if len(os.Args) > 6 {
+			if parsedLimit, err := strconv.ParseInt(os.Args[6], 10, 64); err == nil {
+				if parsedLimit <= 0 {
+					fmt.Println("下载上限必须是正整数（字节）")
+					os.Exit(1)
+				}
+				downloadLimit = parsedLimit
+				sourceArgStart = 7
+			}
+		}
+
+		if len(os.Args) > sourceArgStart && os.Args[sourceArgStart] == "official" {
 			officialSourceMode = true
-		} else {
+		} else if len(os.Args) > sourceArgStart {
 			customSourceMode = true
-			customSourceURLs = os.Args[6:]
+			customSourceURLs = os.Args[sourceArgStart:]
 		}
 	}
 
