@@ -75,6 +75,7 @@ class MainActivity : Activity() {
     private lateinit var root: LinearLayout
     private lateinit var status: TextView
     private lateinit var resultsView: TextView
+    private lateinit var dataCenterSummaryView: TextView
     private lateinit var targetInput: EditText
     private lateinit var connectInput: EditText
     private lateinit var downloadInput: EditText
@@ -638,6 +639,10 @@ class MainActivity : Activity() {
         resultsView.setPadding(dp(12), dp(12), dp(12), dp(12))
         resultsView.setBackgroundColor(0xFFF1F3F4.toInt())
         root.addView(resultsView, LinearLayout.LayoutParams(-1, dp(320)))
+        root.addView(label("数据中心汇总", 16f))
+        dataCenterSummaryView = label("暂无数据中心统计", 13f)
+        dataCenterSummaryView.setPadding(dp(12), dp(8), dp(12), dp(8))
+        root.addView(dataCenterSummaryView)
 
         listOf(targetInput, connectInput, downloadInput, topNInput, thresholdInput).forEach { attachMainAutoSave(it) }
         thresholdInput.addTextChangedListener(object : android.text.TextWatcher {
@@ -1302,18 +1307,47 @@ class MainActivity : Activity() {
                 val exitCode = p.waitFor()
                 val parsedRaw = all.toString().lineSequence()
                     .map { it.trim() }
-                    .filter { Regex("^[0-9]{1,3}(?:\\.[0-9]{1,3}){3}#[0-9]+(?:\\.[0-9]+)?M$").matches(it) }
+                    .filter { line ->
+                        val first = line.substringBefore("|")
+                        Regex("^[0-9]{1,3}(?:\\.[0-9]{1,3}){3}#[0-9]+(?:\\.[0-9]+)?M$").matches(first) &&
+                            line.contains("|")
+                    }
                     .toList()
-                val parsed = parsedRaw.map { line ->
-                    val ip = line.substringBefore("#")
-                    val country = runCountryCodes[ip]
-                    if (country.isNullOrBlank()) line else "$line $country"
+                val parsed = parsedRaw.map { raw ->
+                    val fields = raw.split("|")
+                    val baseLine = fields[0]
+                    val ip = baseLine.substringBefore("#")
+                    val speed = baseLine.substringAfter("#").removeSuffix("M")
+                    val colo = fields.getOrNull(1).orEmpty().ifBlank { "UNK" }
+                    val mappedCountry = fields.getOrNull(2).orEmpty()
+                    val country = mappedCountry.ifBlank { runCountryCodes[ip].orEmpty() }.ifBlank { "XX" }
+                    "$ip:443#$colo-$country-${speed}MB/s"
+                }
+                val dcStats = parsedRaw.map { raw ->
+                    val fields = raw.split("|")
+                    val baseLine = fields[0]
+                    val ip = baseLine.substringBefore("#")
+                    val colo = fields.getOrNull(1).orEmpty().ifBlank { "UNK" }
+                    val country = fields.getOrNull(2).orEmpty().ifBlank { runCountryCodes[ip].orEmpty() }.ifBlank { "XX" }
+                    val latency = fields.getOrNull(3)?.toLongOrNull() ?: Long.MAX_VALUE
+                    val region = fields.getOrNull(4).orEmpty()
+                    val city = fields.getOrNull(5).orEmpty()
+                    listOf(colo, country, latency.toString(), region, city)
+                }.filter { it[0] != "UNK" }
+                val dcSummary = dcStats.groupBy { it[0] }.entries.sortedBy { it.key }.map { (colo, rows) ->
+                    val first = rows.first()
+                    val validLatencies = rows.mapNotNull { it[2].toLongOrNull() }.filter { it != Long.MAX_VALUE }
+                    val minLatency = validLatencies.minOrNull()?.let { "${it} ms" } ?: "未知"
+                    val location = listOf(first[3], first[4]).filter { it.isNotBlank() }.distinct().joinToString(" / ")
+                    "$colo-${first[1]}：${rows.size} 个 IP；最低延迟 $minLatency" +
+                        if (location.isNotBlank()) "；$location" else ""
                 }
                 resultLines = parsed
                 val outputText = sourceLog.toString() + all.toString().trim()
                 runOnUiThread {
                     process = null
                     val visible = filterResults(parsed, threshold)
+                    dataCenterSummaryView.text = if (dcSummary.isEmpty()) "暂无可识别的数据中心；请检查网络或映射数据" else dcSummary.joinToString("\n")
                     if (exitCode != 0 || parsed.isEmpty()) {
                         resultsView.text = outputText.takeLast(6000).ifBlank {
                             "测速程序没有输出日志。请检查 IP 来源设置和测速地址。"
@@ -1344,13 +1378,15 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun resultSpeed(line: String): Double {
+        val formatted = Regex("#[A-Z]{3}-[A-Z]{2}-([0-9]+(?:\\.[0-9]+)?)MB/s$").find(line)
+        if (formatted != null) return formatted.groupValues[1].toDoubleOrNull() ?: 0.0
+        return line.substringAfter("#").substringBefore("M").toDoubleOrNull() ?: 0.0
+    }
+
     private fun filterResults(lines: List<String>, threshold: Double): List<String> =
-        lines.filter { line ->
-            val speed = line.substringAfter("#").substringBefore("M").toDoubleOrNull() ?: 0.0
-            speed >= threshold
-        }.sortedByDescending { line ->
-            line.substringAfter("#").substringBefore("M").toDoubleOrNull() ?: 0.0
-        }
+        lines.filter { resultSpeed(it) >= threshold }
+            .sortedByDescending { resultSpeed(it) }
 
     private fun stopTest() {
         val p = process
