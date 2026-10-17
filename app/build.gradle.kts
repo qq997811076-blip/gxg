@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.ipspeed"
         minSdk = 26
         targetSdk = 28
-        versionCode = 2
-        versionName = "1.0"
+        versionCode = 3
+        versionName = "1.0.1"
     }
 
     // Keep Java and Kotlin bytecode targets aligned, as in the reference workflow.
