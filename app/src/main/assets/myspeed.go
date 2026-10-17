@@ -90,7 +90,7 @@ type locationInfo struct {
 
 var (
 	locationsByIATA map[string]locationInfo
-)
+	)
 	locPattern  = regexp.MustCompile(`(?m)^loc=([A-Z]{2})\r?package main
 
 import (
@@ -137,7 +137,7 @@ type locationInfo struct {
 
 var (
 	locationsByIATA map[string]locationInfo
-)
+	)
 	sourceURLs = []string{
 		"https://zip.cm.edu.kg/all.txt",
 		"https://countrymerge.pages.dev/all.txt",
@@ -154,10 +154,10 @@ type Result struct {
 	Bytes   int64
 	Used    float64
 	Latency     time.Duration
-	DataCenter     string
+	DataCenter  string
 	CountryCode    string
 	SourceLocation string
-	Region         string
+	Region      string
 	City        string
 	LatencyMs   int64
 }
@@ -375,7 +375,7 @@ func checkIP(ip, target string) (Result, bool) {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	traceBody := string(body)
 	if matches := locPattern.FindStringSubmatch(traceBody); len(matches) > 1 {
-		r.SourceLocation = strings.ToUpper(strings.TrimSpace(matches[1]))
+		r.SourceLocation = matches[1]
 	}
 	if matches := coloPattern.FindStringSubmatch(traceBody); len(matches) > 1 {
 		r.DataCenter = matches[1]
