@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -30,7 +31,18 @@ const (
 	sourceTimeout          = 60 * time.Second
 )
 
+type locationInfo struct {
+	IATA string `json:"iata"`
+	Lat float64 `json:"lat"`
+	Lon float64 `json:"lon"`
+	CCA2 string `json:"cca2"`
+	Region string `json:"region"`
+	City string `json:"city"`
+}
+
 var (
+	locationsByIATA map[string]locationInfo
+	coloPattern = regexp.MustCompile(`(?m)^colo=([A-Z]{3})\r?$`)
 	sourceURLs = []string{
 		"https://zip.cm.edu.kg/all.txt",
 		"https://countrymerge.pages.dev/all.txt",
@@ -46,7 +58,12 @@ type Result struct {
 	Speed   float64
 	Bytes   int64
 	Used    float64
-	Latency time.Duration
+	Latency     time.Duration
+	DataCenter  string
+	CountryCode string
+	Region      string
+	City        string
+	LatencyMs   int64
 }
 
 func extractIPs(text string) []string {
@@ -258,6 +275,17 @@ func checkIP(ip, target string) (Result, bool) {
 	}
 	defer resp.Body.Close()
 
+	// 延迟仍在收到响应头时结束；读取响应正文仅用于识别数据中心，不计入延迟。
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if matches := coloPattern.FindStringSubmatch(string(body)); len(matches) > 1 {
+		r.DataCenter = matches[1]
+		if loc, ok := locationsByIATA[r.DataCenter]; ok {
+			r.CountryCode = strings.ToUpper(loc.CCA2)
+			r.Region = loc.Region
+			r.City = loc.City
+		}
+	}
+
 	// 收到任何 HTTP 响应即视为连通，不因 3xx、4xx 或 5xx 状态码直接判定失败。
 	return r, true
 }
@@ -458,7 +486,51 @@ func runStage(
 	return passed
 }
 
+func initDataCenterLocations() {
+	locationsByIATA = make(map[string]locationInfo)
+	const filename = "locations.json"
+	const locationsURL = "https://www.baipiao.eu.org/cloudflare/locations"
+	data, err := os.ReadFile(filename)
+	if err != nil || len(data) == 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, locationsURL, nil)
+		if reqErr == nil {
+			req.Header.Set("User-Agent", "Mozilla/5.0")
+			resp, fetchErr := (&http.Client{Timeout: 8*time.Second}).Do(req)
+			if fetchErr == nil {
+				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+					data, err = io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+				} else {
+					err = fmt.Errorf("HTTP 状态码：%d", resp.StatusCode)
+				}
+				resp.Body.Close()
+			} else {
+				err = fetchErr
+			}
+		}
+		if err == nil && len(data) > 0 {
+			if writeErr := os.WriteFile(filename, data, 0644); writeErr != nil {
+				fmt.Printf("数据中心映射缓存写入失败：%v\\n", writeErr)
+			}
+		}
+	}
+	var locations []locationInfo
+	if len(data) == 0 || json.Unmarshal(data, &locations) != nil {
+		fmt.Println("数据中心映射不可用，将继续测速并显示可识别的数据中心代码")
+		return
+	}
+	for _, loc := range locations {
+		code := strings.ToUpper(strings.TrimSpace(loc.IATA))
+		if code != "" {
+			locationsByIATA[code] = loc
+		}
+	}
+	fmt.Printf("数据中心映射已加载：%d 条\\n", len(locationsByIATA))
+}
+
 func main() {
+	initDataCenterLocations()
 	if len(os.Args) < 5 {
 		fmt.Println("用法：./sss 测速地址 连通性并发数 下载测速并发数 延迟最低IP数量 [no [IP来源URL...]]")
 		fmt.Println("默认示例：./sss https://cesu.dxgees.ggff.net 300 100 20")
@@ -559,7 +631,7 @@ func main() {
 		downloadN = len(selected)
 	}
 
-	jobs := make(chan string)
+	jobs := make(chan Result)
 	var wg sync.WaitGroup
 	var resultMu, progressMu sync.Mutex
 	var completed, failed atomic.Int64
@@ -570,8 +642,13 @@ func main() {
 		go func() {
 			defer wg.Done()
 
-			for ip := range jobs {
-				r, err := downloadTest(ip, target)
+			for selectedResult := range jobs {
+				r, err := downloadTest(selectedResult.IP, target)
+				r.DataCenter = selectedResult.DataCenter
+				r.CountryCode = selectedResult.CountryCode
+				r.Region = selectedResult.Region
+				r.City = selectedResult.City
+				r.LatencyMs = selectedResult.Latency.Milliseconds()
 				if err != nil {
 					failed.Add(1)
 				} else if r.Speed > 0 {
@@ -589,7 +666,7 @@ func main() {
 	}
 
 	for _, r := range selected {
-		jobs <- r.IP
+		jobs <- r
 	}
 	close(jobs)
 	wg.Wait()
@@ -630,7 +707,7 @@ func main() {
 	if i > 0 {
 		fmt.Print("\n")
 	}
-	fmt.Printf("%s#%.2fM", r.IP, r.Speed)
+	fmt.Printf("%s#%.2fM|%s|%s|%d|%s|%s", r.IP, r.Speed, r.DataCenter, r.CountryCode, r.LatencyMs, r.Region, r.City)
 }
 fmt.Println()
 }
