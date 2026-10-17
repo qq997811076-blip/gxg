@@ -44,7 +44,100 @@ type locationInfo struct {
 
 var (
 	locationsByIATA map[string]locationInfo
-	coloPattern = regexp.MustCompile(`(?m)^colo=([A-Z]{3})\r?$`)
+	coloPattern = regexp.MustCompile(`(?m)^colo=([A-Z]{3})\r?package main
+
+import (
+	"context"
+	"encoding/json"
+	"crypto/tls"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+const (
+	testDuration     = 10 * time.Second
+	idleTimeout      = 3 * time.Second
+	downloadLimit    int64 = 50 * 1024 * 1024
+	readBufferSize         = 32 * 1024
+	minDownloadBytes int64 = 64 * 1024
+	minMeasureTime         = 100 * time.Millisecond
+	minSpeed               = 0.5
+	connectTimeout         = 5 * time.Second
+	sourceTimeout          = 60 * time.Second
+)
+
+type locationInfo struct {
+	IATA   string  `json:"iata"`
+	Lat    float64 `json:"lat"`
+	Lon    float64 `json:"lon"`
+	Lng    float64 `json:"lng"`
+	CCA2   string  `json:"cca2"`
+	Region string  `json:"region"`
+	City   string  `json:"city"`
+	Place  string  `json:"place"`
+}
+
+var (
+	locationsByIATA map[string]locationInfo
+)
+	locPattern  = regexp.MustCompile(`(?m)^loc=([A-Z]{2})\r?package main
+
+import (
+	"context"
+	"encoding/json"
+	"crypto/tls"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+const (
+	testDuration     = 10 * time.Second
+	idleTimeout      = 3 * time.Second
+	downloadLimit    int64 = 50 * 1024 * 1024
+	readBufferSize         = 32 * 1024
+	minDownloadBytes int64 = 64 * 1024
+	minMeasureTime         = 100 * time.Millisecond
+	minSpeed               = 0.5
+	connectTimeout         = 5 * time.Second
+	sourceTimeout          = 60 * time.Second
+)
+
+type locationInfo struct {
+	IATA   string  `json:"iata"`
+	Lat    float64 `json:"lat"`
+	Lon    float64 `json:"lon"`
+	Lng    float64 `json:"lng"`
+	CCA2   string  `json:"cca2"`
+	Region string  `json:"region"`
+	City   string  `json:"city"`
+	Place  string  `json:"place"`
+}
+
+var (
+	locationsByIATA map[string]locationInfo
+)
 	sourceURLs = []string{
 		"https://zip.cm.edu.kg/all.txt",
 		"https://countrymerge.pages.dev/all.txt",
@@ -61,9 +154,10 @@ type Result struct {
 	Bytes   int64
 	Used    float64
 	Latency     time.Duration
-	DataCenter  string
-	CountryCode string
-	Region      string
+	DataCenter     string
+	CountryCode    string
+	SourceLocation string
+	Region         string
 	City        string
 	LatencyMs   int64
 }
@@ -279,7 +373,11 @@ func checkIP(ip, target string) (Result, bool) {
 
 	// 延迟仍在收到响应头时结束；读取响应正文仅用于识别数据中心，不计入延迟。
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	if matches := coloPattern.FindStringSubmatch(string(body)); len(matches) > 1 {
+	traceBody := string(body)
+	if matches := locPattern.FindStringSubmatch(traceBody); len(matches) > 1 {
+		r.SourceLocation = strings.ToUpper(strings.TrimSpace(matches[1]))
+	}
+	if matches := coloPattern.FindStringSubmatch(traceBody); len(matches) > 1 {
 		r.DataCenter = matches[1]
 		if loc, ok := locationsByIATA[r.DataCenter]; ok {
 			r.CountryCode = strings.ToUpper(loc.CCA2)
@@ -687,6 +785,7 @@ func main() {
 				r, err := downloadTest(selectedResult.IP, target)
 				r.DataCenter = selectedResult.DataCenter
 				r.CountryCode = selectedResult.CountryCode
+				r.SourceLocation = selectedResult.SourceLocation
 				r.Region = selectedResult.Region
 				r.City = selectedResult.City
 				r.LatencyMs = selectedResult.Latency.Milliseconds()
@@ -748,7 +847,7 @@ func main() {
 	if i > 0 {
 		fmt.Print("\n")
 	}
-	fmt.Printf("%s#%.2fM|%s|%s|%d|%s|%s", r.IP, r.Speed, r.DataCenter, r.CountryCode, r.LatencyMs, r.Region, r.City)
+	fmt.Printf("%s#%.2fM|%s|%s|%s|%d|%s|%s", r.IP, r.Speed, r.DataCenter, r.CountryCode, r.SourceLocation, r.LatencyMs, r.Region, r.City)
 }
 fmt.Println()
 }
