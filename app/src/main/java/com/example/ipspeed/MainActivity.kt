@@ -1367,75 +1367,75 @@ class MainActivity : Activity() {
                     resultsView.text = sourceLog.toString()
                 }
             } else {
-            val mergedIPs = linkedSetOf<String>()
-                if (localEnabled) {
-                    val clipboardParsed = if (clipboardText.isNotBlank()) parseImported(clipboardText, false).first else emptyList()
-                    val localUnique = linkedSetOf<String>().apply {
-                        addAll(parseImported(importedIPs.joinToString("\n"), false).first)
-                        addAll(clipboardParsed)
-                    }.toList()
-                    mergedIPs.addAll(localUnique)
-                    for (ip in localUnique) {
-                        savedGeoRows[ip]?.let { runGeoRows[ip] = it }
-                        savedCountryCodes[ip]?.let { runCountryCodes[ip] = it }
-                    }
-                    sourceLog.append("本地来源：原保存 ${importedIPs.size} 条；重新去重后加入 ${localUnique.size} 个唯一 IPv4\n")
-                } else {
-                    sourceLog.append("本地来源：未启用\n")
-                }
-
-                if (networkEnabled) {
-                    for (sourceURL in urls) {
-                        sourceLog.append("正在读取：${sourceURL}\n")
-                        runOnUiThread {
-                            status.text = "状态：正在读取 IP 来源"
-                            resultsView.text = sourceLog.toString()
+                val mergedIPs = linkedSetOf<String>()
+                    if (localEnabled) {
+                        val clipboardParsed = if (clipboardText.isNotBlank()) parseImported(clipboardText, false).first else emptyList()
+                        val localUnique = linkedSetOf<String>().apply {
+                            addAll(parseImported(importedIPs.joinToString("\n"), false).first)
+                            addAll(clipboardParsed)
+                        }.toList()
+                        mergedIPs.addAll(localUnique)
+                        for (ip in localUnique) {
+                            savedGeoRows[ip]?.let { runGeoRows[ip] = it }
+                            savedCountryCodes[ip]?.let { runCountryCodes[ip] = it }
                         }
-                        var connection: HttpURLConnection? = null
-                        try {
-                            connection = (URL(sourceURL).openConnection() as HttpURLConnection).apply {
-                                connectTimeout = 15000
-                                readTimeout = 60000
-                                instanceFollowRedirects = true
-                                setRequestProperty("User-Agent", "Mozilla/5.0")
+                        sourceLog.append("本地来源：原保存 ${importedIPs.size} 条；重新去重后加入 ${localUnique.size} 个唯一 IPv4\n")
+                    } else {
+                        sourceLog.append("本地来源：未启用\n")
+                    }
+
+                    if (networkEnabled) {
+                        for (sourceURL in urls) {
+                            sourceLog.append("正在读取：${sourceURL}\n")
+                            runOnUiThread {
+                                status.text = "状态：正在读取 IP 来源"
+                                resultsView.text = sourceLog.toString()
                             }
-                            val code = connection.responseCode
-                            if (code !in 200..299) throw java.io.IOException("HTTP 状态码：$code")
-                            val content = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                            val found = parseImported(content, false).first
-                            val geo = parseGeoMetadata(content, false)
-                            mergeGeoMetadata(runGeoRows, runCountryCodes, geo)
-                            val before = mergedIPs.size
-                            mergedIPs.addAll(found)
-                            sourceLog.append("该来源识别到 ${found.size} 个唯一 IPv4；新增 ${mergedIPs.size - before} 个\n")
-                        } catch (e: Exception) {
-                            sourceLog.append("读取失败，跳过此来源：${e.message ?: e.javaClass.simpleName}\n")
-                        } finally {
-                            connection?.disconnect()
+                            var connection: HttpURLConnection? = null
+                            try {
+                                connection = (URL(sourceURL).openConnection() as HttpURLConnection).apply {
+                                    connectTimeout = 15000
+                                    readTimeout = 60000
+                                    instanceFollowRedirects = true
+                                    setRequestProperty("User-Agent", "Mozilla/5.0")
+                                }
+                                val code = connection.responseCode
+                                if (code !in 200..299) throw java.io.IOException("HTTP 状态码：$code")
+                                val content = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                                val found = parseImported(content, false).first
+                                val geo = parseGeoMetadata(content, false)
+                                mergeGeoMetadata(runGeoRows, runCountryCodes, geo)
+                                val before = mergedIPs.size
+                                mergedIPs.addAll(found)
+                                sourceLog.append("该来源识别到 ${found.size} 个唯一 IPv4；新增 ${mergedIPs.size - before} 个\n")
+                            } catch (e: Exception) {
+                                sourceLog.append("读取失败，跳过此来源：${e.message ?: e.javaClass.simpleName}\n")
+                            } finally {
+                                connection?.disconnect()
+                            }
                         }
+                    } else {
+                        sourceLog.append("网络来源：未启用\n")
                     }
-                } else {
-                    sourceLog.append("网络来源：未启用\n")
-                }
 
-                if (mergedIPs.isEmpty()) {
+                    if (mergedIPs.isEmpty()) {
+                        runOnUiThread {
+                            process = null
+                            resultsView.text = sourceLog.toString() + "读取 IP 来源失败：所有来源均未取得有效 IPv4"
+                            status.text = "状态：IP 来源读取失败"
+                        }
+                        return@execute
+                    }
+
+                    // 写入前最后一次规范化去重；Go 核心读取的就是这份文件。
+                    val finalIPs = parseImported(mergedIPs.joinToString("\n"), false).first
+                    ipFile.writeText(finalIPs.joinToString("\n") + "\n")
+                    sourceLog.append("全部来源合并去重后：${finalIPs.size} 个唯一 IPv4\n")
+                    sourceLog.append("最终写入 ips.txt、交给测速核心：${finalIPs.size} 个 IP\n\n")
                     runOnUiThread {
-                        process = null
-                        resultsView.text = sourceLog.toString() + "读取 IP 来源失败：所有来源均未取得有效 IPv4"
-                        status.text = "状态：IP 来源读取失败"
+                        status.text = "状态：即将测速，共 ${finalIPs.size} 个唯一 IP"
+                        resultsView.text = sourceLog.toString()
                     }
-                    return@execute
-                }
-
-                // 写入前最后一次规范化去重；Go 核心读取的就是这份文件。
-                val finalIPs = parseImported(mergedIPs.joinToString("\n"), false).first
-                ipFile.writeText(finalIPs.joinToString("\n") + "\n")
-                sourceLog.append("全部来源合并去重后：${finalIPs.size} 个唯一 IPv4\n")
-                sourceLog.append("最终写入 ips.txt、交给测速核心：${finalIPs.size} 个 IP\n\n")
-                runOnUiThread {
-                    status.text = "状态：即将测速，共 ${finalIPs.size} 个唯一 IP"
-                    resultsView.text = sourceLog.toString()
-                }
             }
                 val p = ProcessBuilder(args).directory(filesDir).redirectErrorStream(true).start()
                 process = p
