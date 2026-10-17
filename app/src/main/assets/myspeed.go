@@ -813,7 +813,6 @@ func getRandomIPv4s(ipList []string) []string {
 	return randomIPs
 }
 
-const maxIPv6SubnetExpansion = 1 << 16
 func loadOfficialIPv4IPs() ([]string, error) {
 	content, err := getIPListContent("ips-v4.txt", "https://www.baipiao.eu.org/cloudflare/ips-v4")
 	if err != nil {
