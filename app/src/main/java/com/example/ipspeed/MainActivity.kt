@@ -952,13 +952,6 @@ class MainActivity : Activity() {
                     }
                     if (::localCheck.isInitialized) localCheck.isChecked = finalIPs.isNotEmpty()
                     status.text = "状态：剪切板导入完成"
-                    val addedCount = finalIPs.size - previousIPs.size
-                    val message = if (parsed.first.isEmpty()) {
-                        "剪切板中没有识别到有效 IPv4；已有 IP 已保留"
-                    } else {
-                        "剪切板导入完成：新增 ${addedCount} 个，累计 ${finalIPs.size} 个唯一 IPv4，重复 ${duplicateCount} 个"
-                    }
-                    Toast.makeText(this, message, Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
                 runOnUiThread {
@@ -1030,13 +1023,6 @@ class MainActivity : Activity() {
                     }
                     if (::localCheck.isInitialized) localCheck.isChecked = finalIPs.isNotEmpty()
                     status.text = "状态：文件导入完成"
-                    val addedCount = finalIPs.size - previousIPs.size
-                    val message = if (parsed.first.isEmpty()) {
-                        "文件已读取，但没有识别到有效 IPv4；已有 IP 已保留"
-                    } else {
-                        "累计导入完成：本次新增 $addedCount 个，累计保存 ${finalIPs.size} 个唯一 IPv4，重复 $duplicateCount 个"
-                    }
-                    Toast.makeText(this, message, Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
                 runOnUiThread {
