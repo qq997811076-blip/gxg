@@ -765,6 +765,7 @@ class MainActivity : Activity() {
         localCheck.setOnCheckedChangeListener { _, _ -> saveSourceSettings() }
         networkCheck.setOnCheckedChangeListener { _, _ -> saveSourceSettings() }
 
+
         root.addView(label("五、GitHub 上传", 18f))
         root.addView(button("账号与仓库设置") { showGitHubSettings() })
         root.addView(label("上传方式", 15f))
@@ -813,6 +814,7 @@ class MainActivity : Activity() {
             setOnCheckedChangeListener { _, checked -> setAutoUploadEnabled(checked) }
         }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) })
         root.addView(uploadActions)
+
 
         listOf(targetInput, connectInput, downloadInput, topNInput, thresholdInput).forEach { attachMainAutoSave(it) }
         thresholdInput.addTextChangedListener(object : android.text.TextWatcher {
@@ -1427,20 +1429,11 @@ class MainActivity : Activity() {
                 process = p
                 runOnUiThread { status.text = "状态：测速进行中" }
                 val all = StringBuilder()
-                var processedLineCount = 0
-                var latestProgressLine = ""
                 p.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { line ->
                         all.append(line).append('\n')
-                        processedLineCount++
-                        latestProgressLine = line.takeLast(160)
-                        // 合并进度刷新：避免大量 IP 输出时每一行日志都抢占主线程。
-                        // 完整日志仍保留，任务结束后统一显示；测速判定和结果不变。
-                        if (processedLineCount == 1 || processedLineCount % 25 == 0) {
-                            val progress = latestProgressLine
-                            runOnUiThread {
-                                status.text = "状态：测速进行中\n$progress"
-                            }
+                        runOnUiThread {
+                            status.text = "状态：测速进行中\n${line.takeLast(160)}"
                         }
                     }
                 }
