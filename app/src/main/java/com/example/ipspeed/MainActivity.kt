@@ -1240,14 +1240,9 @@ class MainActivity : Activity() {
         val found = mutableListOf<String>()
         val tokenRegex = Regex("(?<![0-9.])([0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?:\\s*/\\s*[0-9]{1,2})?)(?![0-9./])")
         for (line in content.lineSequence()) {
-            val tokens = if (csv) {
-                tokenRegex.findAll(line).map { it.groupValues[1] }.toList()
-            } else {
-                val trimmed = line.trimStart()
-                val match = Regex("^([0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?:\\s*/\\s*[0-9]{1,2})?)").find(trimmed)
-                    ?: continue
-                listOf(match.groupValues[1])
-            }
+            // 所有输入渠道统一扫描整行，提取每一个 IPv4/CIDR；不要求 IP 必须位于行首。
+            // 因此文件、网络 URL 和剪切板中的中文逗号、英文逗号、端口或说明文字都不会阻断后续 IP 识别。
+            val tokens = tokenRegex.findAll(line).map { it.groupValues[1] }.toList()
             for (token in tokens) found.addAll(expandIPv4Token(token))
         }
         val unique = linkedSetOf<String>()
