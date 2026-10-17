@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	testDuration     = 10 * time.Second
+	testDuration     = 5 * time.Second
 	idleTimeout      = 3 * time.Second
 	readBufferSize         = 32 * 1024
 	minDownloadBytes int64 = 64 * 1024
