@@ -1426,11 +1426,20 @@ class MainActivity : Activity() {
                 process = p
                 runOnUiThread { status.text = "状态：测速进行中" }
                 val all = StringBuilder()
+                var processedLineCount = 0
+                var latestProgressLine = ""
                 p.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { line ->
                         all.append(line).append('\n')
-                        runOnUiThread {
-                            status.text = "状态：测速进行中\n${line.takeLast(160)}"
+                        processedLineCount++
+                        latestProgressLine = line.takeLast(160)
+                        // 合并进度刷新：避免大量 IP 输出时每一行日志都抢占主线程。
+                        // 完整日志仍保留，任务结束后统一显示；测速判定和结果不变。
+                        if (processedLineCount == 1 || processedLineCount % 25 == 0) {
+                            val progress = latestProgressLine
+                            runOnUiThread {
+                                status.text = "状态：测速进行中\n$progress"
+                            }
                         }
                     }
                 }
