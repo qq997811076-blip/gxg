@@ -916,8 +916,6 @@ class MainActivity : Activity() {
             Toast.makeText(this, "剪切板没有可导入的文本", Toast.LENGTH_SHORT).show()
             return
         }
-        status.text = "状态：正在从剪切板导入 IP"
-        Toast.makeText(this, "正在读取剪切板并识别 IPv4…", Toast.LENGTH_SHORT).show()
         executor.execute {
             try {
                 val parsed = parseImported(text, false)
@@ -974,8 +972,6 @@ class MainActivity : Activity() {
             Toast.makeText(this, "文件选择器没有返回文件地址，请重新选择", Toast.LENGTH_LONG).show()
             return
         }
-        Toast.makeText(this, "已选择文件，正在后台读取和识别 IP…", Toast.LENGTH_LONG).show()
-        status.text = "状态：正在导入文件，请稍候"
         executor.execute {
             try {
                 val content = contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
