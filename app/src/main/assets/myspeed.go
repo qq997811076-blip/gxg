@@ -32,12 +32,14 @@ const (
 )
 
 type locationInfo struct {
-	IATA string `json:"iata"`
-	Lat float64 `json:"lat"`
-	Lon float64 `json:"lon"`
-	CCA2 string `json:"cca2"`
-	Region string `json:"region"`
-	City string `json:"city"`
+	IATA   string  `json:"iata"`
+	Lat    float64 `json:"lat"`
+	Lon    float64 `json:"lon"`
+	Lng    float64 `json:"lng"`
+	CCA2   string  `json:"cca2"`
+	Region string  `json:"region"`
+	City   string  `json:"city"`
+	Place  string  `json:"place"`
 }
 
 var (
@@ -515,18 +517,57 @@ func initDataCenterLocations() {
 			}
 		}
 	}
-	var locations []locationInfo
-	if len(data) == 0 || json.Unmarshal(data, &locations) != nil {
+	if len(data) == 0 {
 		fmt.Println("数据中心映射不可用，将继续测速并显示可识别的数据中心代码")
 		return
 	}
-	for _, loc := range locations {
-		code := strings.ToUpper(strings.TrimSpace(loc.IATA))
-		if code != "" {
-			locationsByIATA[code] = loc
+
+	// 兼容两种常见格式：
+	// 1) 数组：[{"iata":"HKG","cca2":"HK", ...}]
+	// 2) 对象：{"HKG":{"place":"Hong Kong","lng":114. ...,"cca2":"HK", ...}}
+	var locations []locationInfo
+	if err := json.Unmarshal(data, &locations); err == nil && len(locations) > 0 {
+		for _, loc := range locations {
+			addLocation(loc.IATA, loc)
+		}
+	} else {
+		var byCode map[string]json.RawMessage
+		if err := json.Unmarshal(data, &byCode); err != nil || len(byCode) == 0 {
+			fmt.Println("数据中心映射 JSON 格式无法识别，将继续测速并显示可识别的数据中心代码")
+			return
+		}
+		for code, raw := range byCode {
+			var loc locationInfo
+			if err := json.Unmarshal(raw, &loc); err != nil {
+				continue
+			}
+			addLocation(code, loc)
 		}
 	}
+
 	fmt.Printf("数据中心映射已加载：%d 条\n", len(locationsByIATA))
+}
+
+func addLocation(code string, loc locationInfo) {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	if code == "" {
+		code = strings.ToUpper(strings.TrimSpace(loc.IATA))
+	}
+	if code == "" {
+		return
+	}
+	loc.IATA = code
+	if loc.Lon == 0 && loc.Lng != 0 {
+		loc.Lon = loc.Lng
+	}
+	if loc.City == "" && loc.Place != "" {
+		place := strings.TrimSpace(loc.Place)
+		parts := strings.SplitN(place, ",", 2)
+		loc.City = strings.TrimSpace(parts[0])
+	}
+	loc.CCA2 = strings.ToUpper(strings.TrimSpace(loc.CCA2))
+	loc.Region = strings.TrimSpace(loc.Region)
+	locationsByIATA[code] = loc
 }
 
 func main() {
