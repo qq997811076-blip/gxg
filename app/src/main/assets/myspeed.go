@@ -1,15 +1,18 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"crypto/tls"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -578,6 +581,257 @@ func addLocation(code string, loc locationInfo) {
 	locationsByIATA[code] = loc
 }
 
+
+var upstreamHTTPClient = &http.Client{Timeout: 20 * time.Second}
+
+func getIPListContent(filename, apiURL string) (string, error) {
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		content, err := getURLContent(apiURL)
+		if err != nil {
+			return "", err
+		}
+		if err := saveToFile(filename, content); err != nil {
+			fmt.Println("保存 IP 列表缓存失败:", err)
+		}
+		return content, nil
+	}
+	return getFileContent(filename)
+}
+
+func getURLContent(targetURL string) (string, error) {
+	return getURLContentWithContext(context.Background(), targetURL)
+}
+
+func getURLContentWithContext(ctx context.Context, targetURL string) (string, error) {
+	data, err := getURLBytesWithContext(ctx, targetURL)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func getURLBytes(targetURL string) ([]byte, error) {
+	return getURLBytesWithContext(context.Background(), targetURL)
+}
+
+func getURLBytesWithContext(ctx context.Context, targetURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := upstreamHTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("请求失败: %s", resp.Status)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func getFileContent(filename string) (string, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func saveToFile(filename, content string) error {
+	return atomicWriteFile(filename, []byte(content), 0644)
+}
+
+func atomicWriteFile(filename string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(filename)
+	if dir == "" {
+		dir = "."
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(filename)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, filename); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
+}
+
+func readNonEmptyLines(reader io.Reader) ([]string, error) {
+	scanner := bufio.NewScanner(reader)
+	var lines []string
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return lines, scanner.Err()
+}
+
+func parseIPList(content string) ([]string, error) {
+	lines, err := readNonEmptyLines(strings.NewReader(content))
+	if err != nil {
+		return nil, err
+	}
+	for i, line := range lines {
+		if strings.Contains(line, "/") {
+			continue
+		}
+		ip := net.ParseIP(line)
+		if ip == nil {
+			continue
+		}
+		if ip.To4() != nil {
+			lines[i] = line + "/32"
+		} else {
+			lines[i] = line + "/128"
+		}
+	}
+	return lines, nil
+}
+
+const maxIPv4SubnetExpansion = 1 << 16
+
+func expandCIDRTo24s(subnet string) []string {
+	_, ipNet, err := net.ParseCIDR(strings.TrimSpace(subnet))
+	if err != nil {
+		return nil
+	}
+
+	ones, _ := ipNet.Mask.Size()
+	if ones >= 24 {
+		return []string{subnet}
+	}
+
+	baseIP := ipNet.IP.To4()
+	if baseIP == nil {
+		return nil
+	}
+
+	shift := 24 - ones
+	if shift > 16 {
+		shift = 16
+	}
+	count := 1 << uint(shift)
+	if count > maxIPv4SubnetExpansion {
+		count = maxIPv4SubnetExpansion
+	}
+
+	networkInt := uint32(baseIP[0])<<24 | uint32(baseIP[1])<<16 | uint32(baseIP[2])<<8 | uint32(baseIP[3])
+	subnets := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		cur := networkInt + uint32(i)*256
+		ip := net.IPv4(byte(cur>>24), byte(cur>>16), byte(cur>>8), 0)
+		subnets = append(subnets, ip.String()+"/24")
+	}
+
+	return subnets
+}
+
+func randomIPFromCIDR(subnet string) (string, bool) {
+	ip, ipNet, err := net.ParseCIDR(strings.TrimSpace(subnet))
+	if err != nil {
+		return "", false
+	}
+
+	baseIP := ip.Mask(ipNet.Mask)
+	if ipv4 := baseIP.To4(); ipv4 != nil {
+		baseIP = ipv4
+	} else {
+		baseIP = baseIP.To16()
+		if baseIP == nil {
+			return "", false
+		}
+	}
+
+	randomIP := make(net.IP, len(baseIP))
+	copy(randomIP, baseIP)
+
+	ones, bits := ipNet.Mask.Size()
+	hostBits := bits - ones
+	if hostBits <= 0 {
+		return randomIP.String(), true
+	}
+
+	for i := len(randomIP) - 1; i >= 0 && hostBits > 0; i-- {
+		bitsThisByte := hostBits
+		if bitsThisByte > 8 {
+			bitsThisByte = 8
+		}
+		maxValue := 1 << bitsThisByte
+		randomIP[i] |= byte(rand.Intn(maxValue))
+		hostBits -= bitsThisByte
+	}
+
+	return randomIP.String(), true
+}
+
+func getRandomIPv4s(ipList []string) []string {
+	var randomIPs []string
+	for _, subnet := range ipList {
+		subnets := expandCIDRTo24s(subnet)
+		if subnets == nil {
+			continue
+		}
+		for _, cidr := range subnets {
+			randomIP, ok := randomIPFromCIDR(cidr)
+			if !ok {
+				continue
+			}
+			if net.ParseIP(randomIP).To4() == nil {
+				continue
+			}
+			randomIPs = append(randomIPs, randomIP)
+		}
+	}
+	return randomIPs
+}
+
+const maxIPv6SubnetExpansion = 1 << 16
+func loadOfficialIPv4IPs() ([]string, error) {
+	content, err := getIPListContent("ips-v4.txt", "https://www.baipiao.eu.org/cloudflare/ips-v4")
+	if err != nil {
+		return nil, err
+	}
+	ipList, err := parseIPList(content)
+	if err != nil {
+		return nil, fmt.Errorf("解析官方 IPv4 列表失败: %w", err)
+	}
+	ipList = getRandomIPv4s(ipList)
+	if len(ipList) == 0 {
+		return nil, fmt.Errorf("官方 IPv4 列表没有可用地址")
+	}
+	fmt.Printf("官方 IPv4 列表随机读取完成：%d 个候选 IP（缓存文件 ips-v4.txt）\n", len(ipList))
+	return ipList, nil
+}
+
+
 func main() {
 	initDataCenterLocations()
 	if len(os.Args) < 5 {
@@ -594,6 +848,7 @@ func main() {
 	topN, e3 := strconv.Atoi(os.Args[4])
 
 	customSourceMode := false
+	officialSourceMode := false
 	var customSourceURLs []string
 
 	if len(os.Args) > 5 {
@@ -602,8 +857,12 @@ func main() {
 			os.Exit(1)
 		}
 
-		customSourceMode = true
-		customSourceURLs = os.Args[6:]
+		if len(os.Args) > 6 && os.Args[6] == "official" {
+			officialSourceMode = true
+		} else {
+			customSourceMode = true
+			customSourceURLs = os.Args[6:]
+		}
 	}
 
 	if err := validateURL(target); err != nil {
@@ -623,7 +882,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	ips, err := loadAllIPs(customSourceMode, customSourceURLs)
+	var ips []string
+	var err error
+	if officialSourceMode {
+		ips, err = loadOfficialIPv4IPs()
+	} else {
+		ips, err = loadAllIPs(customSourceMode, customSourceURLs)
+	}
 	if err != nil {
 		fmt.Println("读取 IP 来源失败：", err)
 		os.Exit(1)
