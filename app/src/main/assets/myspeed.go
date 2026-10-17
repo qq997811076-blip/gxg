@@ -216,7 +216,9 @@ func makeClient(ip string, timeout time.Duration) *http.Client {
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: true,
 			},
-			DisableCompression: true,
+			TLSHandshakeTimeout:   connectTimeout,
+			ResponseHeaderTimeout: testDuration,
+			DisableCompression:    true,
 			DialContext: func(
 				ctx context.Context, _, _ string,
 			) (net.Conn, error) {
@@ -306,9 +308,7 @@ type readResult struct {
 func downloadTest(ip, target string) (Result, error) {
 	r := Result{IP: ip}
 
-	ctx, cancel := context.WithTimeout(
-		context.Background(), testDuration,
-	)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(
@@ -324,23 +324,23 @@ func downloadTest(ip, target string) (Result, error) {
 		fmt.Sprintf("bytes=0-%d", downloadLimit-1),
 	)
 
-	resp, err := makeClient(ip, testDuration).Do(req)
+	startedAt := time.Now()
+	resp, err := makeClient(ip, 0).Do(req)
 	if err != nil {
 		return r, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK &&
-		resp.StatusCode != http.StatusPartialContent {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= 400 {
 		return r, fmt.Errorf("HTTP 状态码：%d", resp.StatusCode)
 	}
 
-	start := time.Now()
-	var firstData, lastData time.Time
+	bodyStart := time.Now()
+	var lastData time.Time
 	var total int64
 	buf := make([]byte, readBufferSize)
 
-	for time.Since(start) < testDuration &&
+	for time.Since(bodyStart) < testDuration &&
 		total < downloadLimit {
 
 		b := buf
@@ -376,9 +376,6 @@ func downloadTest(ip, target string) (Result, error) {
 
 			if rr.n > 0 {
 				now := time.Now()
-				if firstData.IsZero() {
-					firstData = now
-				}
 				lastData = now
 				total += int64(rr.n)
 			}
@@ -410,14 +407,19 @@ func downloadTest(ip, target string) (Result, error) {
 	}
 
 finished:
-	if total < minDownloadBytes {
-		return r, fmt.Errorf("有效下载数据不足 64 KiB")
+	if total <= 0 {
+		return r, fmt.Errorf("无下载数据")
 	}
 
-	used := lastData.Sub(start).Seconds()
-	if used < minMeasureTime.Seconds() {
-		used = minMeasureTime.Seconds()
+	// 与参考项目一致：速度耗时从发起独立下载请求前开始，
+	// 包含 TCP/TLS 建连、请求/响应头及响应体读取时间。
+	// 响应体阶段另有完整测速窗口；实际下载量以读到的字节数为准。
+	elapsed := time.Since(startedAt)
+	elapsedMs := int64((elapsed + 500*time.Microsecond) / time.Millisecond)
+	if elapsedMs < 1 {
+		elapsedMs = 1
 	}
+	used := float64(elapsedMs) / 1000.0
 
 	r.Bytes = total
 	r.Used = used
