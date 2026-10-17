@@ -608,7 +608,30 @@ class MainActivity : Activity() {
         root.addView(label("IP 测速", 26f))
         root.addView(label("测速参数、IP 来源、上传方式集中管理", 13f))
 
-        root.addView(label("一、测速操作", 18f))
+        val operationHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        operationHeader.addView(label("一、测速操作", 18f), LinearLayout.LayoutParams(0, -2, 1f))
+        operationHeader.addView(android.widget.Switch(this).apply {
+            text = "官方优选"
+            isChecked = prefs.getBoolean("official_source_enabled", false)
+            minWidth = 0
+            minimumWidth = 0
+            thumbTintList = android.content.res.ColorStateList(
+                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+                intArrayOf(Color.rgb(40, 120, 232), Color.rgb(139, 146, 156))
+            )
+            trackTintList = android.content.res.ColorStateList(
+                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+                intArrayOf(Color.rgb(105, 160, 235), Color.rgb(190, 194, 200))
+            )
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean("official_source_enabled", checked).commit()
+                Toast.makeText(this, if (checked) "已启用官方 IPv4 来源" else "已恢复原有 IP 来源", Toast.LENGTH_SHORT).show()
+            }
+        }, LinearLayout.LayoutParams(-2, -2))
+        root.addView(operationHeader)
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         controls.addView(button("开始测速") { startTest() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
         controls.addView(button("停止测速") { stopTest() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
@@ -1285,9 +1308,10 @@ class MainActivity : Activity() {
             .putString("threshold", threshold.toString())
             .apply()
 
+        val officialMode = prefs.getBoolean("official_source_enabled", false)
         val localEnabled = prefs.getBoolean("localEnabled", true)
         val networkEnabled = prefs.getBoolean("networkEnabled", true)
-        val clipboardText = if (localEnabled) {
+        val clipboardText = if (!officialMode && localEnabled) {
             try {
                 val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 val clip = clipboard.primaryClip
@@ -1298,11 +1322,11 @@ class MainActivity : Activity() {
         } else ""
         val urls = prefs.getString("urls", defaults.joinToString("\n"))!!
             .lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
-        if (!localEnabled && !networkEnabled) {
+        if (!officialMode && !localEnabled && !networkEnabled) {
             Toast.makeText(this, "请至少启用一个 IP 来源", Toast.LENGTH_LONG).show()
             return
         }
-        if (localEnabled && importedIPs.isEmpty() && !networkEnabled) {
+        if (!officialMode && localEnabled && importedIPs.isEmpty() && !networkEnabled) {
             Toast.makeText(this, "本地来源已启用，但还没有导入 IP 文件；请启用网络来源或导入文件", Toast.LENGTH_LONG).show()
             return
         }
@@ -1323,6 +1347,7 @@ class MainActivity : Activity() {
         val args = mutableListOf(
             binary.absolutePath, target, connectN.toString(), downloadN.toString(), topN.toString(), "no"
         )
+        if (officialMode) args.add("official")
         resultLines = emptyList()
         resultsView.text = "正在准备测速…"
         status.text = "状态：正在启动"
@@ -1335,7 +1360,14 @@ class MainActivity : Activity() {
             val runCountryCodes = linkedMapOf<String, String>()
             try {
                 // 再次规范化本地保存内容，防止旧版本保存的重复/非规范 IP 混入测速。
-                val mergedIPs = linkedSetOf<String>()
+                if (officialMode) {
+                sourceLog.append("官方优选：由测速核心按 CFData-WEB 原项目方式下载、缓存并随机读取 IPv4\n")
+                runOnUiThread {
+                    status.text = "状态：正在读取官方 IPv4 列表"
+                    resultsView.text = sourceLog.toString()
+                }
+            } else {
+            val mergedIPs = linkedSetOf<String>()
                 if (localEnabled) {
                     val clipboardParsed = if (clipboardText.isNotBlank()) parseImported(clipboardText, false).first else emptyList()
                     val localUnique = linkedSetOf<String>().apply {
@@ -1404,6 +1436,7 @@ class MainActivity : Activity() {
                     status.text = "状态：即将测速，共 ${finalIPs.size} 个唯一 IP"
                     resultsView.text = sourceLog.toString()
                 }
+            }
                 val p = ProcessBuilder(args).directory(filesDir).redirectErrorStream(true).start()
                 process = p
                 runOnUiThread { status.text = "状态：测速进行中" }
