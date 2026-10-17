@@ -973,48 +973,8 @@ class MainActivity : Activity() {
     }
 
     private fun countryCodeFromLine(line: String, csv: Boolean, countryIndex: Int?): String? {
-        if (csv && countryIndex != null) {
-            val fields = splitCsvFields(line)
-            if (countryIndex in fields.indices) {
-                normalizeCountryCode(fields[countryIndex])?.let { return it }
-            }
-        }
-
-        val labelled = Regex(
-            "(?i)(?:country(?:[_ -]?code)?|countrycode|country_iso2|iso[_ -]?(?:alpha2|2))\\s*[:=]\\s*([A-Z]{2})"
-        ).find(line)?.groupValues?.get(1)
-        normalizeCountryCode(labelled)?.let { return it }
-
-        // 无表头 CSV 按“IP、国家代码、地区代码、城市代码、城市名称……”读取；
-        // 若 IP 后先出现数字端口，则继续检查端口后的字段。
-        if (csv) {
-            val fields = splitCsvFields(line)
-            val ipFieldIndex = fields.indexOfFirst {
-                Regex("^[0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?::[0-9]{1,5})?$").matches(it.trim())
-            }
-            if (ipFieldIndex >= 0) {
-                val nextField = fields.getOrNull(ipFieldIndex + 1)
-                normalizeCountryCode(nextField)?.let { return it }
-                if (nextField?.trim()?.matches(Regex("^[0-9]{1,5}$")) == true) {
-                    normalizeCountryCode(fields.getOrNull(ipFieldIndex + 2))?.let { return it }
-                }
-            }
-        }
-
-        // 支持常见的 IP:端口#国家代码 以及 IP#国家代码#地区/城市信息格式。
-        if ('#' in line) {
-            val suffix = line.substringAfter('#')
-                .substringBefore('#')
-                .substringBefore(',')
-                .substringBefore('|')
-                .substringBefore(';')
-                .trim()
-            normalizeCountryCode(suffix)?.let { return it }
-        }
-
-        // 新增兜底：只有原有规则均未识别时，才扫描整行中的独立国家/地区代码。
-        // 这样保留所有旧规则的优先级，同时支持 IP 前后、速度/端口/备注旁的代码。
-        return findCountryCodeAnywhere(line)
+        // 不再从文件或网络来源内容中解析国家代码；国家/地区与数据中心信息由测速响应提供。
+        return null
     }
 
     private fun findCountryCodeAnywhere(line: String): String? {
