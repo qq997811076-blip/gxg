@@ -645,7 +645,11 @@ class MainActivity : Activity() {
         root.addView(dataCenterSummaryView)
 
 
-        root.addView(label("三、测速参数", 18f))
+        val parameterHeaderRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        parameterHeaderRow.addView(label("三、测速参数", 18f), LinearLayout.LayoutParams(0, -2, 1f))
         val downloadCapRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -670,7 +674,8 @@ class MainActivity : Activity() {
         downloadCapRow.addView(label("MiB", 13f).apply {
             setPadding(dp(2), dp(4), 0, dp(4))
         }, LinearLayout.LayoutParams(-2, -2))
-        root.addView(downloadCapRow, LinearLayout.LayoutParams(-1, -2))
+        parameterHeaderRow.addView(downloadCapRow, LinearLayout.LayoutParams(-2, -2))
+        root.addView(parameterHeaderRow, LinearLayout.LayoutParams(-1, -2))
         downloadCapEnabledCheck.setOnCheckedChangeListener { _, _ -> saveMainSettings() }
 
         val savedTarget = prefs.getString("target", defaultTargetUrl).orEmpty()
