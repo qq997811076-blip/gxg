@@ -553,7 +553,7 @@ class MainActivity : Activity() {
                 targetInput.isFocusableInTouchMode = true
                 targetInput.isCursorVisible = true
                 if (clearCustomInput) targetInput.setText("")
-                // Do not steal focus when restoring the saved manual URL on app launch.
+                targetInput.requestFocus()
                 targetInput.setSelection(targetInput.text.length)
             }
         }
@@ -618,30 +618,7 @@ class MainActivity : Activity() {
         root.addView(label("IP 测速", 26f))
         root.addView(label("测速参数、IP 来源、上传方式集中管理", 13f))
 
-        val operationHeader = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        operationHeader.addView(label("一、测速操作", 18f), LinearLayout.LayoutParams(0, -2, 1f))
-        operationHeader.addView(android.widget.Switch(this).apply {
-            text = "官方优选"
-            isChecked = prefs.getBoolean("official_source_enabled", false)
-            minWidth = 0
-            minimumWidth = 0
-            thumbTintList = android.content.res.ColorStateList(
-                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                intArrayOf(Color.rgb(40, 120, 232), Color.rgb(139, 146, 156))
-            )
-            trackTintList = android.content.res.ColorStateList(
-                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                intArrayOf(Color.rgb(105, 160, 235), Color.rgb(190, 194, 200))
-            )
-            setOnCheckedChangeListener { _, checked ->
-                prefs.edit().putBoolean("official_source_enabled", checked).commit()
-                Toast.makeText(this@MainActivity, if (checked) "已启用官方 IPv4 来源" else "已恢复原有 IP 来源", Toast.LENGTH_SHORT).show()
-            }
-        }, LinearLayout.LayoutParams(-2, -2))
-        root.addView(operationHeader)
+        root.addView(label("一、测速操作", 18f))
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         controls.addView(button("开始测速") { startTest() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
         controls.addView(button("停止测速") { stopTest() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
@@ -702,6 +679,7 @@ class MainActivity : Activity() {
         root.addView(parameterHeader)
         downloadCapEnabledCheck.setOnCheckedChangeListener { _, _ -> saveMainSettings() }
 
+        val savedTarget =
         val savedTarget = prefs.getString("target", defaultTargetUrl).orEmpty()
         val savedPreset = prefs.getString("targetPreset", inferTargetPreset(savedTarget)).orEmpty()
         targetInput = edit("HTTPS 测速地址", savedTarget.ifBlank { defaultTargetUrl })
@@ -743,9 +721,7 @@ class MainActivity : Activity() {
                 lastTargetPresetPosition = position
                 setTargetPreset(position, clearCustomInput = position == 4 && previousPosition != 4)
                 saveMainSettings()
-                // Focus/show the keyboard only when the user switches to manual input.
-                // On initial page restoration, keep the saved URL but leave the field unfocused.
-                if (position == 4 && previousPosition != 4) {
+                if (position == 4) {
                     targetInput.post {
                         targetInput.requestFocus()
                         targetInput.setSelection(targetInput.text.length)
@@ -1307,9 +1283,14 @@ class MainActivity : Activity() {
         val found = mutableListOf<String>()
         val tokenRegex = Regex("(?<![0-9.])([0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?:\\s*/\\s*[0-9]{1,2})?)(?![0-9./])")
         for (line in content.lineSequence()) {
-            // 所有输入渠道统一扫描整行，提取每一个 IPv4/CIDR；不要求 IP 必须位于行首。
-            // 因此文件、网络 URL 和剪切板中的中文逗号、英文逗号、端口或说明文字都不会阻断后续 IP 识别。
-            val tokens = tokenRegex.findAll(line).map { it.groupValues[1] }.toList()
+            val tokens = if (csv) {
+                tokenRegex.findAll(line).map { it.groupValues[1] }.toList()
+            } else {
+                val trimmed = line.trimStart()
+                val match = Regex("^([0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?:\\s*/\\s*[0-9]{1,2})?)").find(trimmed)
+                    ?: continue
+                listOf(match.groupValues[1])
+            }
             for (token in tokens) found.addAll(expandIPv4Token(token))
         }
         val unique = linkedSetOf<String>()
@@ -1365,10 +1346,9 @@ class MainActivity : Activity() {
             .putString("threshold", threshold.toString())
             .apply()
 
-        val officialMode = prefs.getBoolean("official_source_enabled", false)
         val localEnabled = prefs.getBoolean("localEnabled", true)
         val networkEnabled = prefs.getBoolean("networkEnabled", true)
-        val clipboardText = if (!officialMode && localEnabled) {
+        val clipboardText = if (localEnabled) {
             try {
                 val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 val clip = clipboard.primaryClip
@@ -1379,11 +1359,11 @@ class MainActivity : Activity() {
         } else ""
         val urls = prefs.getString("urls", defaults.joinToString("\n"))!!
             .lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
-        if (!officialMode && !localEnabled && !networkEnabled) {
+        if (!localEnabled && !networkEnabled) {
             Toast.makeText(this, "请至少启用一个 IP 来源", Toast.LENGTH_LONG).show()
             return
         }
-        if (!officialMode && localEnabled && importedIPs.isEmpty() && !networkEnabled) {
+        if (localEnabled && importedIPs.isEmpty() && !networkEnabled) {
             Toast.makeText(this, "本地来源已启用，但还没有导入 IP 文件；请启用网络来源或导入文件", Toast.LENGTH_LONG).show()
             return
         }
@@ -1391,10 +1371,8 @@ class MainActivity : Activity() {
         val binary = File(filesDir, "sss")
         val ipFile = File(filesDir, "ips.txt")
         try {
-            // 每次启动测速都用 APK 内当前版本覆盖私有目录中的旧核心。
-            // 否则升级 APK 后，filesDir/sss 仍可能保留旧版，导致 official 被当成普通 URL。
-            assets.open("sss").use { input ->
-                FileOutputStream(binary, false).use { output -> input.copyTo(output) }
+            if (!binary.exists()) assets.open("sss").use { input ->
+                FileOutputStream(binary).use { output -> input.copyTo(output) }
             }
             binary.setExecutable(true, true)
         } catch (e: Exception) {
@@ -1407,7 +1385,6 @@ class MainActivity : Activity() {
             binary.absolutePath, target, connectN.toString(), downloadN.toString(), topN.toString(),
             "no", downloadCapBytes.toString()
         )
-        if (officialMode) args.add("official")
         resultLines = emptyList()
         resultsView.text = "正在准备测速…"
         status.text = "状态：正在启动"
@@ -1420,83 +1397,75 @@ class MainActivity : Activity() {
             val runCountryCodes = linkedMapOf<String, String>()
             try {
                 // 再次规范化本地保存内容，防止旧版本保存的重复/非规范 IP 混入测速。
-                if (officialMode) {
-                sourceLog.append("官方优选：由测速核心按 CFData-WEB 原项目方式下载、缓存并随机读取 IPv4\n")
+                val mergedIPs = linkedSetOf<String>()
+                if (localEnabled) {
+                    val clipboardParsed = if (clipboardText.isNotBlank()) parseImported(clipboardText, false).first else emptyList()
+                    val localUnique = linkedSetOf<String>().apply {
+                        addAll(parseImported(importedIPs.joinToString("\n"), false).first)
+                        addAll(clipboardParsed)
+                    }.toList()
+                    mergedIPs.addAll(localUnique)
+                    for (ip in localUnique) {
+                        savedGeoRows[ip]?.let { runGeoRows[ip] = it }
+                        savedCountryCodes[ip]?.let { runCountryCodes[ip] = it }
+                    }
+                    sourceLog.append("本地来源：原保存 ${importedIPs.size} 条；重新去重后加入 ${localUnique.size} 个唯一 IPv4\n")
+                } else {
+                    sourceLog.append("本地来源：未启用\n")
+                }
+
+                if (networkEnabled) {
+                    for (sourceURL in urls) {
+                        sourceLog.append("正在读取：${sourceURL}\n")
+                        runOnUiThread {
+                            status.text = "状态：正在读取 IP 来源"
+                            resultsView.text = sourceLog.toString()
+                        }
+                        var connection: HttpURLConnection? = null
+                        try {
+                            connection = (URL(sourceURL).openConnection() as HttpURLConnection).apply {
+                                connectTimeout = 15000
+                                readTimeout = 60000
+                                instanceFollowRedirects = true
+                                setRequestProperty("User-Agent", "Mozilla/5.0")
+                            }
+                            val code = connection.responseCode
+                            if (code !in 200..299) throw java.io.IOException("HTTP 状态码：$code")
+                            val content = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                            val found = parseImported(content, false).first
+                            val geo = parseGeoMetadata(content, false)
+                            mergeGeoMetadata(runGeoRows, runCountryCodes, geo)
+                            val before = mergedIPs.size
+                            mergedIPs.addAll(found)
+                            sourceLog.append("该来源识别到 ${found.size} 个唯一 IPv4；新增 ${mergedIPs.size - before} 个\n")
+                        } catch (e: Exception) {
+                            sourceLog.append("读取失败，跳过此来源：${e.message ?: e.javaClass.simpleName}\n")
+                        } finally {
+                            connection?.disconnect()
+                        }
+                    }
+                } else {
+                    sourceLog.append("网络来源：未启用\n")
+                }
+
+                if (mergedIPs.isEmpty()) {
+                    runOnUiThread {
+                        process = null
+                        resultsView.text = sourceLog.toString() + "读取 IP 来源失败：所有来源均未取得有效 IPv4"
+                        status.text = "状态：IP 来源读取失败"
+                    }
+                    return@execute
+                }
+
+                // 写入前最后一次规范化去重；Go 核心读取的就是这份文件。
+                val finalIPs = parseImported(mergedIPs.joinToString("\n"), false).first
+                ipFile.writeText(finalIPs.joinToString("\n") + "\n")
+                sourceLog.append("全部来源合并去重后：${finalIPs.size} 个唯一 IPv4\n")
+                sourceLog.append("最终写入 ips.txt、交给测速核心：${finalIPs.size} 个 IP\n\n")
                 runOnUiThread {
-                    status.text = "状态：正在读取官方 IPv4 列表"
+                    status.text = "状态：即将测速，共 ${finalIPs.size} 个唯一 IP"
                     resultsView.text = sourceLog.toString()
                 }
-            } else {
-                val mergedIPs = linkedSetOf<String>()
-                    if (localEnabled) {
-                        val clipboardParsed = if (clipboardText.isNotBlank()) parseImported(clipboardText, false).first else emptyList()
-                        val localUnique = linkedSetOf<String>().apply {
-                            addAll(parseImported(importedIPs.joinToString("\n"), false).first)
-                            addAll(clipboardParsed)
-                        }.toList()
-                        mergedIPs.addAll(localUnique)
-                        for (ip in localUnique) {
-                            savedGeoRows[ip]?.let { runGeoRows[ip] = it }
-                            savedCountryCodes[ip]?.let { runCountryCodes[ip] = it }
-                        }
-                        sourceLog.append("本地来源：原保存 ${importedIPs.size} 条；重新去重后加入 ${localUnique.size} 个唯一 IPv4\n")
-                    } else {
-                        sourceLog.append("本地来源：未启用\n")
-                    }
-
-                    if (networkEnabled) {
-                        for (sourceURL in urls) {
-                            sourceLog.append("正在读取：${sourceURL}\n")
-                            runOnUiThread {
-                                status.text = "状态：正在读取 IP 来源"
-                                resultsView.text = sourceLog.toString()
-                            }
-                            var connection: HttpURLConnection? = null
-                            try {
-                                connection = (URL(sourceURL).openConnection() as HttpURLConnection).apply {
-                                    connectTimeout = 15000
-                                    readTimeout = 60000
-                                    instanceFollowRedirects = true
-                                    setRequestProperty("User-Agent", "Mozilla/5.0")
-                                }
-                                val code = connection.responseCode
-                                if (code !in 200..299) throw java.io.IOException("HTTP 状态码：$code")
-                                val content = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                                val found = parseImported(content, false).first
-                                val geo = parseGeoMetadata(content, false)
-                                mergeGeoMetadata(runGeoRows, runCountryCodes, geo)
-                                val before = mergedIPs.size
-                                mergedIPs.addAll(found)
-                                sourceLog.append("该来源识别到 ${found.size} 个唯一 IPv4；新增 ${mergedIPs.size - before} 个\n")
-                            } catch (e: Exception) {
-                                sourceLog.append("读取失败，跳过此来源：${e.message ?: e.javaClass.simpleName}\n")
-                            } finally {
-                                connection?.disconnect()
-                            }
-                        }
-                    } else {
-                        sourceLog.append("网络来源：未启用\n")
-                    }
-
-                    if (mergedIPs.isEmpty()) {
-                        runOnUiThread {
-                            process = null
-                            resultsView.text = sourceLog.toString() + "读取 IP 来源失败：所有来源均未取得有效 IPv4"
-                            status.text = "状态：IP 来源读取失败"
-                        }
-                        return@execute
-                    }
-
-                    // 写入前最后一次规范化去重；Go 核心读取的就是这份文件。
-                    val finalIPs = parseImported(mergedIPs.joinToString("\n"), false).first
-                    ipFile.writeText(finalIPs.joinToString("\n") + "\n")
-                    sourceLog.append("全部来源合并去重后：${finalIPs.size} 个唯一 IPv4\n")
-                    sourceLog.append("最终写入 ips.txt、交给测速核心：${finalIPs.size} 个 IP\n\n")
-                    runOnUiThread {
-                        status.text = "状态：即将测速，共 ${finalIPs.size} 个唯一 IP"
-                        resultsView.text = sourceLog.toString()
-                    }
-            }
                 val p = ProcessBuilder(args).directory(filesDir).redirectErrorStream(true).start()
                 process = p
                 runOnUiThread { status.text = "状态：测速进行中" }
