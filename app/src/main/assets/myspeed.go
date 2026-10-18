@@ -1,18 +1,15 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"crypto/tls"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -23,7 +20,7 @@ import (
 )
 
 const (
-	testDuration     = 5 * time.Second
+	testDuration     = 10 * time.Second
 	idleTimeout      = 3 * time.Second
 	readBufferSize         = 32 * 1024
 	minDownloadBytes int64 = 64 * 1024
@@ -220,9 +217,7 @@ func makeClient(ip string, timeout time.Duration) *http.Client {
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: true,
 			},
-			TLSHandshakeTimeout:   connectTimeout,
-			ResponseHeaderTimeout: testDuration,
-			DisableCompression:    true,
+			DisableCompression: true,
 			DialContext: func(
 				ctx context.Context, _, _ string,
 			) (net.Conn, error) {
@@ -312,7 +307,9 @@ type readResult struct {
 func downloadTest(ip, target string) (Result, error) {
 	r := Result{IP: ip}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(
+		context.Background(), testDuration,
+	)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(
@@ -328,23 +325,23 @@ func downloadTest(ip, target string) (Result, error) {
 		fmt.Sprintf("bytes=0-%d", downloadLimit-1),
 	)
 
-	startedAt := time.Now()
-	resp, err := makeClient(ip, 0).Do(req)
+	resp, err := makeClient(ip, testDuration).Do(req)
 	if err != nil {
 		return r, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= 400 {
+	if resp.StatusCode != http.StatusOK &&
+		resp.StatusCode != http.StatusPartialContent {
 		return r, fmt.Errorf("HTTP 状态码：%d", resp.StatusCode)
 	}
 
-	bodyStart := time.Now()
-	var lastData time.Time
+	start := time.Now()
+	var firstData, lastData time.Time
 	var total int64
 	buf := make([]byte, readBufferSize)
 
-	for time.Since(bodyStart) < testDuration &&
+	for time.Since(start) < testDuration &&
 		total < downloadLimit {
 
 		b := buf
@@ -380,6 +377,9 @@ func downloadTest(ip, target string) (Result, error) {
 
 			if rr.n > 0 {
 				now := time.Now()
+				if firstData.IsZero() {
+					firstData = now
+				}
 				lastData = now
 				total += int64(rr.n)
 			}
@@ -411,19 +411,14 @@ func downloadTest(ip, target string) (Result, error) {
 	}
 
 finished:
-	if total <= 0 {
-		return r, fmt.Errorf("无下载数据")
+	if total < minDownloadBytes {
+		return r, fmt.Errorf("有效下载数据不足 64 KiB")
 	}
 
-	// 与参考项目一致：速度耗时从发起独立下载请求前开始，
-	// 包含 TCP/TLS 建连、请求/响应头及响应体读取时间。
-	// 响应体阶段另有完整测速窗口；实际下载量以读到的字节数为准。
-	elapsed := time.Since(startedAt)
-	elapsedMs := int64((elapsed + 500*time.Microsecond) / time.Millisecond)
-	if elapsedMs < 1 {
-		elapsedMs = 1
+	used := lastData.Sub(start).Seconds()
+	if used < minMeasureTime.Seconds() {
+		used = minMeasureTime.Seconds()
 	}
-	used := float64(elapsedMs) / 1000.0
 
 	r.Bytes = total
 	r.Used = used
@@ -582,304 +577,6 @@ func addLocation(code string, loc locationInfo) {
 	locationsByIATA[code] = loc
 }
 
-
-var upstreamHTTPClient = &http.Client{Timeout: 20 * time.Second}
-
-// 官方 IPv4 来源单独使用公共 DNS 解析，避免 Android/Termux 环境中的
-// 本地 DNS 被错误指向 [::1]:53 时，官方列表下载直接失败。
-func getOfficialIPv4ListContent() (string, error) {
-	const filename = "ips-v4.txt"
-	if _, err := os.Stat(filename); err == nil {
-		return getFileContent(filename)
-	} else if !os.IsNotExist(err) {
-		return "", err
-	}
-
-	resolver := &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			dialer := &net.Dialer{Timeout: 5 * time.Second}
-			return dialer.DialContext(ctx, network, "1.1.1.1:53")
-		},
-	}
-	dialer := &net.Dialer{Timeout: 10 * time.Second, Resolver: resolver}
-	client := &http.Client{
-		Timeout: 20 * time.Second,
-		Transport: &http.Transport{
-			DialContext: dialer.DialContext,
-		},
-	}
-	req, err := http.NewRequest(http.MethodGet, "https://www.baipiao.eu.org/cloudflare/ips-v4", nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("官方 IPv4 列表请求失败: %s", resp.Status)
-	}
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	content := string(data)
-	if err := saveToFile(filename, content); err != nil {
-		fmt.Println("保存官方 IPv4 列表缓存失败:", err)
-	}
-	return content, nil
-}
-
-func getIPListContent(filename, apiURL string) (string, error) {
-	if _, err := os.Stat(filename); os.IsNotExist(err) {
-		content, err := getURLContent(apiURL)
-		if err != nil {
-			return "", err
-		}
-		if err := saveToFile(filename, content); err != nil {
-			fmt.Println("保存 IP 列表缓存失败:", err)
-		}
-		return content, nil
-	}
-	return getFileContent(filename)
-}
-
-func getURLContent(targetURL string) (string, error) {
-	return getURLContentWithContext(context.Background(), targetURL)
-}
-
-func getURLContentWithContext(ctx context.Context, targetURL string) (string, error) {
-	data, err := getURLBytesWithContext(ctx, targetURL)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-func getURLBytes(targetURL string) ([]byte, error) {
-	return getURLBytesWithContext(context.Background(), targetURL)
-}
-
-func getURLBytesWithContext(ctx context.Context, targetURL string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := upstreamHTTPClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("请求失败: %s", resp.Status)
-	}
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
-}
-
-func getFileContent(filename string) (string, error) {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-func saveToFile(filename, content string) error {
-	return atomicWriteFile(filename, []byte(content), 0644)
-}
-
-func atomicWriteFile(filename string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(filename)
-	if dir == "" {
-		dir = "."
-	}
-	tmp, err := os.CreateTemp(dir, filepath.Base(filename)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return err
-	}
-	if err := os.Chmod(tmpName, perm); err != nil {
-		os.Remove(tmpName)
-		return err
-	}
-	if err := os.Rename(tmpName, filename); err != nil {
-		os.Remove(tmpName)
-		return err
-	}
-	return nil
-}
-
-func readNonEmptyLines(reader io.Reader) ([]string, error) {
-	scanner := bufio.NewScanner(reader)
-	var lines []string
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		lines = append(lines, line)
-	}
-	return lines, scanner.Err()
-}
-
-func parseIPList(content string) ([]string, error) {
-	lines, err := readNonEmptyLines(strings.NewReader(content))
-	if err != nil {
-		return nil, err
-	}
-	for i, line := range lines {
-		if strings.Contains(line, "/") {
-			continue
-		}
-		ip := net.ParseIP(line)
-		if ip == nil {
-			continue
-		}
-		if ip.To4() != nil {
-			lines[i] = line + "/32"
-		} else {
-			lines[i] = line + "/128"
-		}
-	}
-	return lines, nil
-}
-
-const maxIPv4SubnetExpansion = 1 << 16
-
-func expandCIDRTo24s(subnet string) []string {
-	_, ipNet, err := net.ParseCIDR(strings.TrimSpace(subnet))
-	if err != nil {
-		return nil
-	}
-
-	ones, _ := ipNet.Mask.Size()
-	if ones >= 24 {
-		return []string{subnet}
-	}
-
-	baseIP := ipNet.IP.To4()
-	if baseIP == nil {
-		return nil
-	}
-
-	shift := 24 - ones
-	if shift > 16 {
-		shift = 16
-	}
-	count := 1 << uint(shift)
-	if count > maxIPv4SubnetExpansion {
-		count = maxIPv4SubnetExpansion
-	}
-
-	networkInt := uint32(baseIP[0])<<24 | uint32(baseIP[1])<<16 | uint32(baseIP[2])<<8 | uint32(baseIP[3])
-	subnets := make([]string, 0, count)
-	for i := 0; i < count; i++ {
-		cur := networkInt + uint32(i)*256
-		ip := net.IPv4(byte(cur>>24), byte(cur>>16), byte(cur>>8), 0)
-		subnets = append(subnets, ip.String()+"/24")
-	}
-
-	return subnets
-}
-
-func randomIPFromCIDR(subnet string) (string, bool) {
-	ip, ipNet, err := net.ParseCIDR(strings.TrimSpace(subnet))
-	if err != nil {
-		return "", false
-	}
-
-	baseIP := ip.Mask(ipNet.Mask)
-	if ipv4 := baseIP.To4(); ipv4 != nil {
-		baseIP = ipv4
-	} else {
-		baseIP = baseIP.To16()
-		if baseIP == nil {
-			return "", false
-		}
-	}
-
-	randomIP := make(net.IP, len(baseIP))
-	copy(randomIP, baseIP)
-
-	ones, bits := ipNet.Mask.Size()
-	hostBits := bits - ones
-	if hostBits <= 0 {
-		return randomIP.String(), true
-	}
-
-	for i := len(randomIP) - 1; i >= 0 && hostBits > 0; i-- {
-		bitsThisByte := hostBits
-		if bitsThisByte > 8 {
-			bitsThisByte = 8
-		}
-		maxValue := 1 << bitsThisByte
-		randomIP[i] |= byte(rand.Intn(maxValue))
-		hostBits -= bitsThisByte
-	}
-
-	return randomIP.String(), true
-}
-
-func getRandomIPv4s(ipList []string) []string {
-	var randomIPs []string
-	for _, subnet := range ipList {
-		subnets := expandCIDRTo24s(subnet)
-		if subnets == nil {
-			continue
-		}
-		for _, cidr := range subnets {
-			randomIP, ok := randomIPFromCIDR(cidr)
-			if !ok {
-				continue
-			}
-			if net.ParseIP(randomIP).To4() == nil {
-				continue
-			}
-			randomIPs = append(randomIPs, randomIP)
-		}
-	}
-	return randomIPs
-}
-
-func loadOfficialIPv4IPs() ([]string, error) {
-	content, err := getOfficialIPv4ListContent()
-	if err != nil {
-		return nil, err
-	}
-	ipList, err := parseIPList(content)
-	if err != nil {
-		return nil, fmt.Errorf("解析官方 IPv4 列表失败: %w", err)
-	}
-	ipList = getRandomIPv4s(ipList)
-	if len(ipList) == 0 {
-		return nil, fmt.Errorf("官方 IPv4 列表没有可用地址")
-	}
-	fmt.Printf("官方 IPv4 列表随机读取完成：%d 个候选 IP（缓存文件 ips-v4.txt）\n", len(ipList))
-	return ipList, nil
-}
-
-
 func main() {
 	initDataCenterLocations()
 	if len(os.Args) < 5 {
@@ -942,13 +639,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	var ips []string
-	var err error
-	if officialSourceMode {
-		ips, err = loadOfficialIPv4IPs()
-	} else {
-		ips, err = loadAllIPs(customSourceMode, customSourceURLs)
-	}
+	ips, err := loadAllIPs(customSourceMode, customSourceURLs)
 	if err != nil {
 		fmt.Println("读取 IP 来源失败：", err)
 		os.Exit(1)
