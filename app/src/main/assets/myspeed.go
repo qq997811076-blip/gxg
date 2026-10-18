@@ -592,7 +592,6 @@ func main() {
 	topN, e3 := strconv.Atoi(os.Args[4])
 
 	customSourceMode := false
-	officialSourceMode := false
 	var customSourceURLs []string
 	sourceArgStart := 6
 
@@ -614,9 +613,7 @@ func main() {
 			}
 		}
 
-		if len(os.Args) > sourceArgStart && os.Args[sourceArgStart] == "official" {
-			officialSourceMode = true
-		} else if len(os.Args) > sourceArgStart {
+		if len(os.Args) > sourceArgStart {
 			customSourceMode = true
 			customSourceURLs = os.Args[sourceArgStart:]
 		}
@@ -639,13 +636,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	var ips []string
-	var err error
-	if officialSourceMode {
-		ips, err = loadOfficialIPv4IPs()
-	} else {
-		ips, err = loadAllIPs(customSourceMode, customSourceURLs)
-	}
+	ips, err := loadAllIPs(customSourceMode, customSourceURLs)
 	if err != nil {
 		fmt.Println("读取 IP 来源失败：", err)
 		os.Exit(1)
