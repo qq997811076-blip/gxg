@@ -22,7 +22,6 @@ import (
 const (
 	testDuration     = 5 * time.Second
 	idleTimeout      = 3 * time.Second
-	downloadLimit    int64 = 50 * 1024 * 1024
 	readBufferSize         = 32 * 1024
 	minDownloadBytes int64 = 64 * 1024
 	minMeasureTime         = 100 * time.Millisecond
@@ -30,6 +29,8 @@ const (
 	connectTimeout         = 5 * time.Second
 	sourceTimeout          = 60 * time.Second
 )
+
+var downloadLimit int64 = 50 * 1024 * 1024
 
 type locationInfo struct {
 	IATA   string  `json:"iata"`
@@ -593,6 +594,7 @@ func main() {
 
 	customSourceMode := false
 	var customSourceURLs []string
+	sourceArgStart := 6
 
 	if len(os.Args) > 5 {
 		if os.Args[5] != "no" {
@@ -601,7 +603,18 @@ func main() {
 		}
 
 		customSourceMode = true
-		customSourceURLs = os.Args[6:]
+		// 新增参数是下载字节上限；若第一个参数不是整数，则兼容原有 IP 来源 URL 参数。
+		if len(os.Args) > 6 {
+			if parsedLimit, err := strconv.ParseInt(os.Args[6], 10, 64); err == nil {
+				if parsedLimit <= 0 {
+					fmt.Println("下载上限必须是正整数（字节）")
+					os.Exit(1)
+				}
+				downloadLimit = parsedLimit
+				sourceArgStart = 7
+			}
+		}
+		customSourceURLs = os.Args[sourceArgStart:]
 	}
 
 	if err := validateURL(target); err != nil {
@@ -632,7 +645,7 @@ func main() {
 	fmt.Printf("连通性检测并发数：%d\n", connectN)
 	fmt.Printf("下载测速并发数：%d\n", downloadN)
 	fmt.Printf("延迟最低筛选数量：%d\n", topN)
-	fmt.Println("单 IP 下载上限：50 MiB")
+	fmt.Printf("单 IP 下载上限：%.2f MiB\n", float64(downloadLimit)/(1024*1024))
 	fmt.Println("单 IP 最长测速时间：10 秒")
 	fmt.Println("单 IP 无数据超时：3 秒")
 	fmt.Println("最低有效下载量：64 KiB")
