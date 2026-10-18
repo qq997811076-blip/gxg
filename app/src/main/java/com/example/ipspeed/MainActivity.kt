@@ -86,6 +86,8 @@ class MainActivity : Activity() {
     private lateinit var downloadInput: EditText
     private lateinit var topNInput: EditText
     private lateinit var thresholdInput: EditText
+    private lateinit var downloadCapInput: EditText
+    private lateinit var downloadCapEnabledCheck: CheckBox
     private lateinit var urlsInput: EditText
     private lateinit var localCheck: CheckBox
     private lateinit var networkCheck: CheckBox
@@ -502,6 +504,11 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun replaceTargetBytesParameter(url: String, bytes: Long): String {
+        val pattern = Regex("([?&]bytes=)[^&#]*", RegexOption.IGNORE_CASE)
+        return pattern.replace(url) { match -> "${match.groupValues[1]}$bytes" }
+    }
+
     private fun inferTargetPreset(savedTarget: String): String {
         return when (savedTarget.trim()) {
             "", defaultTargetUrl -> "auto"
@@ -571,6 +578,8 @@ class MainActivity : Activity() {
                 .putString("downloadN", downloadInput.text.toString())
                 .putString("topN", topNInput.text.toString())
                 .putString("threshold", thresholdInput.text.toString())
+                .putString("download_cap_mib", if (::downloadCapInput.isInitialized) downloadCapInput.text.toString() else prefs.getString("download_cap_mib", "1").orEmpty())
+                .putBoolean("download_cap_enabled", if (::downloadCapEnabledCheck.isInitialized) downloadCapEnabledCheck.isChecked else prefs.getBoolean("download_cap_enabled", true))
                 .commit()
             if (!ok) Toast.makeText(this, "设置保存失败，请检查设备存储空间", Toast.LENGTH_LONG).show()
             ok
@@ -637,6 +646,33 @@ class MainActivity : Activity() {
 
 
         root.addView(label("三、测速参数", 18f))
+        val downloadCapRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        downloadCapEnabledCheck = CheckBox(this).apply {
+            text = "启用"
+            isChecked = prefs.getBoolean("download_cap_enabled", true)
+            setPadding(0, 0, 0, 0)
+        }
+        downloadCapInput = edit("1", prefs.getString("download_cap_mib", "1").orEmpty()).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setSingleLine(true)
+            textSize = 14f
+        }
+        downloadCapRow.addView(downloadCapEnabledCheck, LinearLayout.LayoutParams(-2, -2))
+        downloadCapRow.addView(label("下载上限", 14f).apply {
+            setPadding(dp(2), dp(4), dp(2), dp(4))
+        }, LinearLayout.LayoutParams(-2, -2))
+        downloadCapRow.addView(downloadCapInput, LinearLayout.LayoutParams(dp(58), -2).apply {
+            marginStart = dp(2)
+        })
+        downloadCapRow.addView(label("MiB", 13f).apply {
+            setPadding(dp(2), dp(4), 0, dp(4))
+        }, LinearLayout.LayoutParams(-2, -2))
+        root.addView(downloadCapRow, LinearLayout.LayoutParams(-1, -2))
+        downloadCapEnabledCheck.setOnCheckedChangeListener { _, _ -> saveMainSettings() }
+
         val savedTarget = prefs.getString("target", defaultTargetUrl).orEmpty()
         val savedPreset = prefs.getString("targetPreset", inferTargetPreset(savedTarget)).orEmpty()
         targetInput = edit("HTTPS 测速地址", savedTarget.ifBlank { defaultTargetUrl })
@@ -816,7 +852,7 @@ class MainActivity : Activity() {
         root.addView(uploadActions)
 
 
-        listOf(targetInput, connectInput, downloadInput, topNInput, thresholdInput).forEach { attachMainAutoSave(it) }
+        listOf(targetInput, connectInput, downloadInput, topNInput, thresholdInput, downloadCapInput).forEach { attachMainAutoSave(it) }
         thresholdInput.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
@@ -1267,7 +1303,20 @@ class MainActivity : Activity() {
             Toast.makeText(this, "测速正在运行", Toast.LENGTH_SHORT).show()
             return
         }
-        val target = resolveTargetUrlForCore()
+        val configuredTarget = resolveTargetUrlForCore()
+        val capEnabled = downloadCapEnabledCheck.isChecked
+        val capMiB = downloadCapInput.text.toString().trim().toDoubleOrNull()
+        if (capEnabled && (capMiB == null || capMiB <= 0.0 || capMiB > 1_000_000.0)) {
+            Toast.makeText(this, "下载上限必须是大于 0 且不超过 1000000 MiB 的数字", Toast.LENGTH_LONG).show()
+            return
+        }
+        val downloadCapBytes = if (capEnabled) {
+            (capMiB!! * 1024.0 * 1024.0).toLong()
+        } else {
+            50L * 1024L * 1024L
+        }
+        // 仅为本次测速生成带下载上限的 URL，不改写已保存的原始地址。
+        val target = if (capEnabled) replaceTargetBytesParameter(configuredTarget, downloadCapBytes) else configuredTarget
         val connectN = connectInput.text.toString().trim().toIntOrNull()
         val downloadN = downloadInput.text.toString().trim().toIntOrNull()
         val topN = topNInput.text.toString().trim().toIntOrNull()
@@ -1280,8 +1329,10 @@ class MainActivity : Activity() {
         }
 
         prefs.edit()
-            .putString("target", target)
+            .putString("target", configuredTarget)
             .putString("targetPreset", currentTargetPreset())
+            .putString("download_cap_mib", downloadCapInput.text.toString())
+            .putBoolean("download_cap_enabled", capEnabled)
             .putString("connectN", connectN.toString())
             .putString("downloadN", downloadN.toString())
             .putString("topN", topN.toString())
@@ -1324,7 +1375,7 @@ class MainActivity : Activity() {
 
         // Android 原生网络栈读取 IP 来源，避免 Go 纯 Go DNS 解析器误用 ::1:53。
         val args = mutableListOf(
-            binary.absolutePath, target, connectN.toString(), downloadN.toString(), topN.toString(), "no"
+            binary.absolutePath, target, connectN.toString(), downloadN.toString(), topN.toString(), "no", downloadCapBytes.toString()
         )
         resultLines = emptyList()
         resultsView.text = "正在准备测速…"
