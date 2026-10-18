@@ -639,7 +639,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	ips, err := loadAllIPs(customSourceMode, customSourceURLs)
+	var ips []string
+	var err error
+	if officialSourceMode {
+		ips, err = loadOfficialIPv4IPs()
+	} else {
+		ips, err = loadAllIPs(customSourceMode, customSourceURLs)
+	}
 	if err != nil {
 		fmt.Println("读取 IP 来源失败：", err)
 		os.Exit(1)
