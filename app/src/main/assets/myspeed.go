@@ -309,8 +309,13 @@ type readResult struct {
 	err error
 }
 
-func downloadTest(ip, target string) (Result, error) {
+func downloadTest(ip, target string, useReferenceCore bool) (Result, error) {
 	r := Result{IP: ip}
+	limit := downloadLimit
+	if useReferenceCore {
+		// 非标优选按 CFData-WEB 对照版本固定为 1 MiB；官方优选保留原有上限设置。
+		limit = 1 * 1024 * 1024
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -323,13 +328,40 @@ func downloadTest(ip, target string) (Result, error) {
 	}
 
 	req.Header.Set("User-Agent", "Mozilla/5.0")
+	if useReferenceCore {
+		req.Header.Set("Accept-Encoding", "identity")
+	}
 	req.Header.Set(
 		"Range",
-		fmt.Sprintf("bytes=0-%d", downloadLimit-1),
+		fmt.Sprintf("bytes=0-%d", limit-1),
 	)
 
 	startedAt := time.Now()
-	resp, err := makeClient(ip, 0).Do(req)
+	client := makeClient(ip, 0)
+	if useReferenceCore {
+		parsedURL, parseErr := url.ParseRequestURI(target)
+		if parseErr != nil || parsedURL.Hostname() == "" {
+			return r, fmt.Errorf("测速地址无效")
+		}
+		// 仅非标优选使用对照版本的 TLS ServerName；不改变官方优选原有连接配置。
+		client = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig:       &tls.Config{ServerName: parsedURL.Hostname(), InsecureSkipVerify: true},
+				TLSHandshakeTimeout:   5 * time.Second,
+				ResponseHeaderTimeout: 5 * time.Second,
+				DisableCompression:    true,
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(
+						ctx, "tcp", net.JoinHostPort(ip, "443"),
+					)
+				},
+			},
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return r, err
 	}
@@ -345,10 +377,10 @@ func downloadTest(ip, target string) (Result, error) {
 	buf := make([]byte, readBufferSize)
 
 	for time.Since(bodyStart) < testDuration &&
-		total < downloadLimit {
+		total < limit {
 
 		b := buf
-		if left := downloadLimit - total; int64(len(b)) > left {
+		if left := limit - total; int64(len(b)) > left {
 			b = b[:int(left)]
 		}
 
@@ -413,6 +445,9 @@ func downloadTest(ip, target string) (Result, error) {
 finished:
 	if total <= 0 {
 		return r, fmt.Errorf("无下载数据")
+	}
+	if useReferenceCore && total < minDownloadBytes {
+		return r, fmt.Errorf("下载数据不足（低于 64 KiB）")
 	}
 
 	// 与参考项目一致：速度耗时从发起独立下载请求前开始，
@@ -959,11 +994,22 @@ func main() {
 	fmt.Printf("连通性检测并发数：%d\n", connectN)
 	fmt.Printf("下载测速并发数：%d\n", downloadN)
 	fmt.Printf("延迟最低筛选数量：%d\n", topN)
-	fmt.Println("单 IP 下载上限：50 MiB")
-	fmt.Println("单 IP 最长测速时间：10 秒")
-	fmt.Println("单 IP 无数据超时：3 秒")
-	fmt.Println("最低有效下载量：64 KiB")
-	fmt.Println("最低打印速度：0.5M")
+	if officialSourceMode {
+		fmt.Println("单 IP 下载上限：按现有设置")
+		fmt.Println("单 IP 最长测速时间：保留官方优选原有逻辑")
+		fmt.Println("单 IP 无数据超时：3 秒")
+		fmt.Println("最低有效下载量：保留官方优选原有逻辑")
+		fmt.Println("最低打印速度：0.5M")
+	} else {
+		fmt.Println("单 IP 下载上限：1 MiB")
+		fmt.Println("单 IP 下载测速窗口：5 秒")
+		fmt.Println("TCP 连接超时：5 秒")
+		fmt.Println("TLS 握手超时：5 秒")
+		fmt.Println("HTTP 响应头超时：5 秒")
+		fmt.Println("单 IP 无数据超时：3 秒")
+		fmt.Println("最低有效下载量：64 KiB")
+		fmt.Println("非标优选不使用 0.5 MiB/s 过滤")
+	}
 
 	// 第一阶段：检测所有 IP 的 HTTPS 连通性和延迟。
 	connected := runStage(
@@ -1017,7 +1063,7 @@ func main() {
 			defer wg.Done()
 
 			for selectedResult := range jobs {
-				r, err := downloadTest(selectedResult.IP, target)
+				r, err := downloadTest(selectedResult.IP, target, !officialSourceMode)
 				r.DataCenter = selectedResult.DataCenter
 				r.CountryCode = selectedResult.CountryCode
 				r.SourceLocation = selectedResult.SourceLocation
@@ -1050,10 +1096,10 @@ func main() {
 	fmt.Print("\r\033[K\n")
 	progressMu.Unlock()
 
-	// 保留原来的 0.5 MiB/s 过滤规则。
+	// 官方优选保留原来的 0.5 MiB/s 过滤；非标优选不做该过滤。
 	filtered := make([]Result, 0, len(results))
 	for _, r := range results {
-		if r.Speed >= minSpeed {
+		if !officialSourceMode || r.Speed >= minSpeed {
 			filtered = append(filtered, r)
 		}
 	}
