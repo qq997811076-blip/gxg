@@ -64,15 +64,14 @@ IPSpeed Android — IPv4 IP 测速工具
 - "https://zip.cm.edu.kg/all.txt"
 - "https://countrymerge.pages.dev/all.txt"
 
-五、地理信息与结果展示
+五、地理信息来源
 
-- 导入 TXT/CSV 数据时，可以保留与 IP 对应的原始地理信息记录。
-- 支持保存和恢复 IP 对应的地理信息。
-- 支持保留已有的国家代码元数据。
-- 测速结果可以结合可用的地理信息展示国家代码。
-- 提供数据中心统计汇总。
+地理信息由 Cloudflare HTTPS Trace 响应和数据中心位置映射数据提供。
 
-说明：国家代码和地理信息的显示取决于输入数据及测速核心实际返回的信息，不代表所有 IP 都一定具有完整的地理信息。
+- 数据中心代码（colo）：从 Cloudflare Trace 响应中获取。
+- 国家／地区代码（loc）：从 Cloudflare Trace 响应中获取。
+- 国家、区域和城市信息：通过本地 "locations.json" 或网络位置映射数据进行匹配。
+- IP 来源：TXT、CSV、剪贴板和网络 URL 主要用于导入待测速 IP，不是地理信息的来源。
 
 六、GitHub 上传
 
