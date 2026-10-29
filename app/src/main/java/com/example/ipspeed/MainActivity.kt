@@ -46,6 +46,22 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 open class MainActivity : Activity() {
+    companion object {
+        @Volatile private var activeTestOwner: MainActivity? = null
+
+        @Synchronized
+        private fun reserveTestTask(owner: MainActivity): Boolean {
+            if (activeTestOwner != null) return false
+            activeTestOwner = owner
+            return true
+        }
+
+        @Synchronized
+        private fun releaseTestTask(owner: MainActivity) {
+            if (activeTestOwner === owner) activeTestOwner = null
+        }
+    }
+
     protected open val prefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
     private val sharedUploadPrefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
     protected open val isOfficialMode: Boolean = false
@@ -666,10 +682,14 @@ open class MainActivity : Activity() {
         }
         titleRow.addView(label("IP 测速", 26f), LinearLayout.LayoutParams(0, -2, 1f))
         titleRow.addView(modeButton("个性优选", !isOfficialMode) {
-            if (isOfficialMode) finish()
+            if (isOfficialMode) {
+                startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+            }
         }, LinearLayout.LayoutParams(dp(88), -2).apply { marginStart = dp(4) })
         titleRow.addView(modeButton("官方优选", isOfficialMode) {
-            if (!isOfficialMode) startActivity(Intent(this, OfficialActivity::class.java))
+            if (!isOfficialMode) {
+                startActivity(Intent(this, OfficialActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+            }
         }, LinearLayout.LayoutParams(dp(88), -2).apply { marginStart = dp(4) })
         root.addView(titleRow, LinearLayout.LayoutParams(-1, -2))
         root.addView(label(if (isOfficialMode) "测速参数与上传方式集中管理" else "测速参数、IP 来源、上传方式集中管理", 13f))
@@ -968,8 +988,16 @@ open class MainActivity : Activity() {
                 val threshold = s?.toString()?.toDoubleOrNull() ?: return
                 if (threshold >= 0.5 && resultLines.isNotEmpty()) {
                     val visible = filterResults(resultLines, threshold)
-                    resultsView.text = if (visible.isEmpty()) "没有达到显示标准的结果" else visible.joinToString("\n")
-                    status.text = "状态：结果筛选中；显示 ${visible.size} 条"
+                    if (visible.isEmpty()) {
+                        resultsView.textSize = 14f
+                        resultsView.text = "没有达到显示标准的结果"
+                    } else if (isOfficialMode) {
+                        renderOfficialSpeedResults(visible.take(15))
+                    } else {
+                        resultsView.text = visible.joinToString("\n")
+                    }
+                    val displayedCount = if (isOfficialMode) minOf(visible.size, 15) else visible.size
+                    status.text = "状态：结果筛选中；符合条件 ${visible.size} 条，当前显示 ${displayedCount} 条"
                 }
             }
             override fun afterTextChanged(s: android.text.Editable?) {}
@@ -1581,6 +1609,11 @@ open class MainActivity : Activity() {
             return
         }
 
+        if (!reserveTestTask(this)) {
+            Toast.makeText(this, "另一个优选页面的任务尚未完成，请等待任务结束", Toast.LENGTH_LONG).show()
+            return
+        }
+
         // 按指定数据中心测速时，所有合格 IP 都参与；普通模式仍使用原来的低延迟数量参数。
         val effectiveTopN = topN
         // Android 原生网络栈读取 IP 来源，避免 Go 纯 Go DNS 解析器误用 ::1:53。
@@ -1590,6 +1623,7 @@ open class MainActivity : Activity() {
         if (connectivityOnly) args.add("connect-only")
         if (selectedIPs != null) args.add("speed-only")
         resultLines = emptyList()
+        resultsView.textSize = 14f
         resultsView.text = "正在准备测速…"
         status.text = "状态：正在启动"
         process = null
@@ -1828,12 +1862,15 @@ open class MainActivity : Activity() {
                         }
                     } else {
                         if (visible.isEmpty()) {
+                            resultsView.textSize = 14f
                             resultsView.text = "没有达到显示标准的结果"
                         } else if (isOfficialMode) {
-                            renderOfficialSpeedResults(visible)
+                            renderOfficialSpeedResults(visible.take(15))
                         } else {
                             resultsView.text = visible.joinToString("\n")
                         }
+                        // Keep the complete filtered result set for copy, saved history, and upload;
+                        // only the official on-screen list is capped at 15 rows.
                         val snapshot = visible.joinToString("\n")
                         val saved = try { prefs.edit().putString("last_completed_result", snapshot).commit() } catch (_: Exception) { false }
                         if (!saved) Toast.makeText(this, "最近一次测速结果保存失败", Toast.LENGTH_LONG).show()
@@ -1849,6 +1886,8 @@ open class MainActivity : Activity() {
                     status.text = "状态：启动失败"
                     resultsView.text = e.toString()
                 }
+            } finally {
+                releaseTestTask(this@MainActivity)
             }
         }
     }
@@ -1939,6 +1978,7 @@ open class MainActivity : Activity() {
     }
 
     private fun renderOfficialSpeedResults(lines: List<String>) {
+        resultsView.textSize = 16f
         val content = SpannableStringBuilder()
         lines.forEachIndexed { index, line ->
             val ip = line.substringBefore(":443#")
@@ -1997,7 +2037,7 @@ open class MainActivity : Activity() {
         when {
             githubPage -> showMain()
             sourcePage -> showMain()
-            else -> super.onBackPressed()
+            else -> moveTaskToBack(true)
         }
     }
 
