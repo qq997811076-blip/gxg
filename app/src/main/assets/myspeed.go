@@ -689,11 +689,11 @@ func main() {
 			return connected[i].Latency < connected[j].Latency
 		})
 		for _, r := range connected {
-			fmt.Printf("CONNECTED|%s|%s|%s|%s|%d|%s|%s\\n",
+			fmt.Printf("CONNECTED|%s|%s|%s|%s|%d|%s|%s\n",
 				r.IP, r.DataCenter, r.CountryCode, r.SourceLocation,
 				r.Latency.Milliseconds(), r.Region, r.City)
 		}
-		fmt.Printf("连通性检测结束：%d 个 IP 合格；未启动下载测速。\\n", len(connected))
+		fmt.Printf("连通性检测结束：%d 个 IP 合格；未启动下载测速。\n", len(connected))
 		return
 	}
 
