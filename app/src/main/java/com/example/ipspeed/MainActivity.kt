@@ -842,7 +842,7 @@ open class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
-            speedOption.addView(label("开始测速", 16f).apply {
+            speedOption.addView(label("自动测速", 16f).apply {
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(0, dp(4), dp(2), dp(4))
             }, LinearLayout.LayoutParams(-2, -2))
@@ -863,6 +863,8 @@ open class MainActivity : Activity() {
             ).apply {
                 textSize = 15f
                 setSingleLine(true)
+                gravity = Gravity.CENTER_VERTICAL or Gravity.END
+                setPadding(paddingLeft, paddingTop, 0, paddingBottom)
                 addTextChangedListener(object : android.text.TextWatcher {
                     override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
                     override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
@@ -2064,7 +2066,7 @@ open class MainActivity : Activity() {
                     val colo = fields.getOrNull(1).orEmpty().ifBlank { "UNK" }
                     val sourceLocation = fields.getOrNull(3).orEmpty().ifBlank { "XX" }
                     if (isOfficialMode) {
-                        "$ip:443#官方优选-${speed}MB/s"
+                        "$ip:443#官方优选-$colo-${speed}MB/s"
                     } else {
                         "$ip:443#$colo-$sourceLocation-${speed}MB/s"
                     }
@@ -2251,7 +2253,7 @@ open class MainActivity : Activity() {
     }
 
     private fun resultSpeed(line: String): Double {
-        val officialFormatted = Regex("#官方优选-([0-9]+(?:\\.[0-9]+)?)MB/s$").find(line)
+        val officialFormatted = Regex("#官方优选-[A-Z0-9]+-([0-9]+(?:\\.[0-9]+)?)MB/s$").find(line)
         if (officialFormatted != null) return officialFormatted.groupValues[1].toDoubleOrNull() ?: 0.0
         val formatted = Regex("#[A-Z]{3}-[A-Z]{2}-([0-9]+(?:\\.[0-9]+)?)MB/s$").find(line)
         if (formatted != null) return formatted.groupValues[1].toDoubleOrNull() ?: 0.0
