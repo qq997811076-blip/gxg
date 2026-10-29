@@ -704,10 +704,8 @@ open class MainActivity : Activity() {
                 isFillViewport = true
                 overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
             }
-            dataCenterScroll.addView(
-                dataCenterRowsContainer,
-                ScrollView.LayoutParams(-1, -2)
-            )
+            // ScrollView 会为唯一子视图生成默认的 MATCH_PARENT/WRAP_CONTENT 布局参数。
+            dataCenterScroll.addView(dataCenterRowsContainer)
             root.addView(dataCenterScroll, LinearLayout.LayoutParams(-1, dp(240)))
         }
         root.addView(label("数据中心汇总", 16f))
