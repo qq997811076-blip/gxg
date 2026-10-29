@@ -709,6 +709,15 @@ open class MainActivity : Activity() {
             val qualifiedScroll = ScrollView(this).apply {
                 isFillViewport = false
                 overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+                setOnTouchListener { view, event ->
+                    when (event.actionMasked) {
+                        android.view.MotionEvent.ACTION_DOWN,
+                        android.view.MotionEvent.ACTION_MOVE -> view.parent?.requestDisallowInterceptTouchEvent(true)
+                        android.view.MotionEvent.ACTION_UP,
+                        android.view.MotionEvent.ACTION_CANCEL -> view.parent?.requestDisallowInterceptTouchEvent(false)
+                    }
+                    false
+                }
             }
             qualifiedScroll.addView(dataCenterRowsContainer, android.view.ViewGroup.LayoutParams(-1, -2))
             qualifiedFrame.addView(qualifiedScroll, LinearLayout.LayoutParams(-1, dp(240)))
@@ -1725,7 +1734,7 @@ open class MainActivity : Activity() {
                     runOnUiThread {
                         process = null
                         if (exitCode != 0) {
-                            resultsView.text = (sourceLog.toString() + all.toString()).takeLast(6000)
+                            resultsView.text = ""
                             status.text = "状态：连通性测试异常退出（代码 $exitCode）"
                         } else {
                             officialQualifiedByDataCenter = candidates
@@ -1734,15 +1743,7 @@ open class MainActivity : Activity() {
                                 .mapValues { (_, rows) ->
                                     rows.sortedWith(compareBy<OfficialCandidate> { it.latencyMs }.thenBy { it.ip })
                                 }
-                            resultsView.text = if (officialQualifiedByDataCenter.isEmpty()) {
-                                "没有通过连通性测试的 IP"
-                            } else {
-                                officialQualifiedByDataCenter.entries.joinToString("\n\n") { (colo, rows) ->
-                                    val country = rows.firstOrNull()?.country ?: "XX"
-                                    "$colo-$country（${rows.size} 个合格 IP）\n" +
-                                        rows.joinToString("\n") { it.ip }
-                                }
-                            }
+                            resultsView.text = ""
                             renderOfficialDataCenterRows()
                             val qualifiedCount = candidates.size
                             status.text = "状态：连通性测试完成；合格 IP $qualifiedCount 个；未自动测速"
