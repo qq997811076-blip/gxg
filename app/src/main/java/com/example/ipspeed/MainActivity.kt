@@ -83,7 +83,7 @@ open class MainActivity : Activity() {
     )
 
     private val cloudflareIPv4RangesUrl = "https://www.cloudflare.com/ips-v4"
-    private val officialRandomIPCount = 65_534
+    private val officialRandomIPCount = 6_534
 
     private lateinit var root: LinearLayout
     private lateinit var status: TextView
@@ -1521,21 +1521,27 @@ open class MainActivity : Activity() {
                 if (isOfficialMode) {
                     val rangesFile = File(filesDir, "cloudflare_ipv4_ranges.txt")
                     var refreshed = false
-                    try {
-                        val rangeCount = refreshCloudflareIPv4Ranges(rangesFile)
-                        refreshed = true
-                        sourceLog.append("已从 Cloudflare 官方更新 IPv4 网段：$rangeCount 段\n")
-                    } catch (e: Exception) {
-                        sourceLog.append("更新 Cloudflare 官方网段失败，尝试使用本地缓存：${e.message ?: e.javaClass.simpleName}\n")
+                    var ranges = loadCloudflareIPv4Ranges(rangesFile)
+                    if (ranges.isNotEmpty()) {
+                        sourceLog.append("官方优选：读取本地 IPv4 网段缓存，共 ${ranges.size} 段，不重新下载\n")
+                    } else {
+                        sourceLog.append("官方优选：本地 IPv4 网段文件不存在或无有效内容，正在下载 Cloudflare 最新公布网段\n")
+                        try {
+                            val rangeCount = refreshCloudflareIPv4Ranges(rangesFile)
+                            refreshed = true
+                            sourceLog.append("已从 Cloudflare 官方下载并保存 IPv4 网段：$rangeCount 段\n")
+                            ranges = loadCloudflareIPv4Ranges(rangesFile)
+                        } catch (e: Exception) {
+                            sourceLog.append("下载 Cloudflare 官方网段失败：${e.message ?: e.javaClass.simpleName}\n")
+                        }
                     }
-                    val ranges = loadCloudflareIPv4Ranges(rangesFile)
                     if (ranges.isEmpty()) {
                         throw IOException("Cloudflare 官方网段下载失败，且没有可用缓存")
                     }
                     val selectedIPs = sampleCloudflareIPv4s(rangesFile, officialRandomIPCount)
                     mergedIPs.addAll(selectedIPs)
                     sourceLog.append(
-                        "官方优选：${if (refreshed) "使用最新网段" else "使用已保存网段"}，完全随机抽取 ${mergedIPs.size} 个不重复 IPv4\n"
+                        "官方优选：${if (refreshed) "使用刚下载的网段" else "使用已保存网段"}，完全随机抽取 ${mergedIPs.size} 个不重复 IPv4\n"
                     )
                 } else {
                     if (localEnabled) {
