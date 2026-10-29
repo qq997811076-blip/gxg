@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - add-official-independent-ui-20261029
   workflow_dispatch:
 
 permissions:
