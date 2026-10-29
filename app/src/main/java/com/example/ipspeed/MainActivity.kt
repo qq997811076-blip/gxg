@@ -196,6 +196,22 @@ open class MainActivity : Activity() {
             setOnClickListener { action() }
         }
 
+    private fun modeButton(text: String, selected: Boolean, action: () -> Unit): Button =
+        button(text, action).apply {
+            textSize = 13f
+            isAllCaps = false
+            minWidth = 0
+            minimumWidth = 0
+            setPadding(dp(8), 0, dp(8), 0)
+            setTextColor(if (selected) Color.WHITE else Color.rgb(55, 65, 81))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(8).toFloat()
+                setColor(if (selected) Color.rgb(33, 150, 243) else Color.rgb(235, 238, 242))
+                setStroke(dp(1), if (selected) Color.rgb(33, 150, 243) else Color.rgb(210, 215, 222))
+            }
+        }
+
     private fun addField(title: String, input: EditText) {
         root.addView(label(title))
         root.addView(input, LinearLayout.LayoutParams(-1, -2))
@@ -631,13 +647,12 @@ open class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         titleRow.addView(label("IP 测速", 26f), LinearLayout.LayoutParams(0, -2, 1f))
-        titleRow.addView(button(if (isOfficialMode) "个性优选" else "官方优选") {
-            if (isOfficialMode) {
-                finish()
-            } else {
-                startActivity(Intent(this, OfficialActivity::class.java))
-            }
-        }, LinearLayout.LayoutParams(-2, -2))
+        titleRow.addView(modeButton("个性优选", !isOfficialMode) {
+            if (isOfficialMode) finish()
+        }, LinearLayout.LayoutParams(dp(88), -2).apply { marginStart = dp(4) })
+        titleRow.addView(modeButton("官方优选", isOfficialMode) {
+            if (!isOfficialMode) startActivity(Intent(this, OfficialActivity::class.java))
+        }, LinearLayout.LayoutParams(dp(88), -2).apply { marginStart = dp(4) })
         root.addView(titleRow, LinearLayout.LayoutParams(-1, -2))
         root.addView(label(if (isOfficialMode) "测速参数与上传方式集中管理" else "测速参数、IP 来源、上传方式集中管理", 13f))
 
