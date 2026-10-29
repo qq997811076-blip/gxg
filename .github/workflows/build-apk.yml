@@ -8,6 +8,7 @@ on:
       - official-cf-ip-random-65534-20261029
       - ui-two-mode-switch-20261029
       - official-connectivity-first-20261030
+      - official-speed-only-20261030
   workflow_dispatch:
 
 permissions:
