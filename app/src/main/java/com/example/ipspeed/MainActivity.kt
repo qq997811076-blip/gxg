@@ -39,8 +39,9 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-class MainActivity : Activity() {
-    private val prefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
+open class MainActivity : Activity() {
+    protected open val prefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
+    protected open val isOfficialMode: Boolean = false
     private val executor = Executors.newSingleThreadExecutor()
     private var process: Process? = null
     private var importedIPs: List<String> = emptyList()
@@ -614,7 +615,19 @@ class MainActivity : Activity() {
         githubLastUploadCountView = null
         makeRoot()
 
-        root.addView(label("IP 测速", 26f))
+        val titleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        titleRow.addView(label("IP 测速", 26f), LinearLayout.LayoutParams(0, -2, 1f))
+        titleRow.addView(button("官方优选") {
+            if (isOfficialMode) {
+                Toast.makeText(this, "当前已在官方优选界面", Toast.LENGTH_SHORT).show()
+            } else {
+                startActivity(Intent(this, OfficialActivity::class.java))
+            }
+        }, LinearLayout.LayoutParams(-2, -2))
+        root.addView(titleRow, LinearLayout.LayoutParams(-1, -2))
         root.addView(label("测速参数、IP 来源、上传方式集中管理", 13f))
 
         root.addView(label("一、测速操作", 18f))
@@ -1366,8 +1379,8 @@ class MainActivity : Activity() {
             return
         }
 
-        val binary = File(filesDir, "sss")
-        val ipFile = File(filesDir, "ips.txt")
+        val binary = File(filesDir, if (isOfficialMode) "official_sss" else "sss")
+        val ipFile = File(filesDir, if (isOfficialMode) "official_ips.txt" else "ips.txt")
         try {
             if (!binary.exists()) assets.open("sss").use { input ->
                 FileOutputStream(binary).use { output -> input.copyTo(output) }
