@@ -686,23 +686,24 @@ open class MainActivity : Activity() {
         status = label("状态：待开始", 14f)
         status.setPadding(0, dp(2), 0, dp(8))
         root.addView(status)
-        root.addView(label(if (isOfficialMode) "合格结果（按数据中心分类）" else "合格结果（按速度从高到低）", 16f))
         resultsView = label("暂无结果")
         resultsView.textSize = 14f
         resultsView.setPadding(dp(12), dp(12), dp(12), dp(12))
         resultsView.setBackgroundColor(0xFFF1F3F4.toInt())
-        root.addView(resultsView, LinearLayout.LayoutParams(-1, dp(320)))
         if (isOfficialMode) {
+            // 官方优选只展示下方的数据中心汇总行，不展示逐条 IP 列表。
             dataCenterRowsContainer = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(0, dp(4), 0, dp(4))
             }
             root.addView(dataCenterRowsContainer, LinearLayout.LayoutParams(-1, -2))
+        } else {
+            root.addView(label("合格结果（按速度从高到低）", 16f))
+            root.addView(resultsView, LinearLayout.LayoutParams(-1, dp(320)))
         }
-        root.addView(label("数据中心汇总", 16f))
+        // 保留内部状态字段，但不在官方优选页面额外显示汇总说明，避免干扰数据中心行。
         dataCenterSummaryView = label("暂无数据中心统计", 13f)
         dataCenterSummaryView.setPadding(dp(12), dp(8), dp(12), dp(8))
-        root.addView(dataCenterSummaryView)
 
 
         val parameterHeaderRow = LinearLayout(this).apply {
@@ -1703,15 +1704,8 @@ open class MainActivity : Activity() {
                                 .mapValues { (_, rows) ->
                                     rows.sortedWith(compareBy<OfficialCandidate> { it.latencyMs }.thenBy { it.ip })
                                 }
-                            resultsView.text = if (officialQualifiedByDataCenter.isEmpty()) {
-                                "没有通过连通性测试的 IP"
-                            } else {
-                                officialQualifiedByDataCenter.entries.joinToString("\n\n") { (colo, rows) ->
-                                    val country = rows.firstOrNull()?.country ?: "XX"
-                                    "$colo-$country（${rows.size} 个合格 IP）\n" +
-                                        rows.joinToString("\n") { it.ip }
-                                }
-                            }
+                            // 具体 IP 仍保留在内存中供手动测速使用，但不显示在界面上。
+                            resultsView.text = ""
                             renderOfficialDataCenterRows()
                             val qualifiedCount = candidates.size
                             status.text = "状态：连通性测试完成；合格 IP $qualifiedCount 个；未自动测速"
@@ -1799,7 +1793,13 @@ open class MainActivity : Activity() {
             dataCenterRowsContainer.addView(label("暂无合格数据中心", 13f))
             return
         }
-        officialQualifiedByDataCenter.forEach { (colo, candidates) ->
+        officialQualifiedByDataCenter.entries
+            .sortedWith(
+                compareBy<Map.Entry<String, List<OfficialCandidate>>> {
+                    it.value.minOfOrNull { candidate -> candidate.latencyMs } ?: Double.MAX_VALUE
+                }.thenBy { it.key }
+            )
+            .forEach { (colo, candidates) ->
             val first = candidates.firstOrNull()
             val country = first?.country ?: "XX"
             val minLatency = candidates.minOfOrNull { it.latencyMs } ?: Double.MAX_VALUE
