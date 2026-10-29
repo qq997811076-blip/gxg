@@ -1316,6 +1316,87 @@ open class MainActivity : Activity() {
         return unique.toList() to duplicates
     }
 
+
+    // 官方优选专用：本地缓存 Cloudflare 官方 IPv4 CIDR，并从所有网段整体均匀抽取 6534 个不重复地址。
+    private fun loadOfficialRandomIPs(): List<String> {
+        val cidrFile = File(filesDir, "cloudflare_ipv4_cidrs.txt")
+        if (!cidrFile.exists()) {
+            var connection: HttpURLConnection? = null
+            try {
+                connection = (URL("https://www.cloudflare.com/ips-v4").openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 15000
+                    readTimeout = 30000
+                    instanceFollowRedirects = true
+                    setRequestProperty("User-Agent", "Mozilla/5.0")
+                }
+                val code = connection.responseCode
+                if (code !in 200..299) throw IOException("HTTP 状态码：$code")
+                val downloaded = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                if (downloaded.lineSequence().none { it.trim().matches(Regex("^[0-9.]+/[0-9]{1,2}$")) }) {
+                    throw IOException("Cloudflare 官方 IPv4 网段列表为空或格式无效")
+                }
+                cidrFile.writeText(downloaded.trim() + "\n", Charsets.UTF_8)
+            } finally {
+                connection?.disconnect()
+            }
+        }
+
+        val ranges = mutableListOf<Pair<Long, Long>>()
+        for (line in cidrFile.readLines(Charsets.UTF_8)) {
+            val value = line.trim()
+            if (value.isEmpty()) continue
+            val parts = value.split("/")
+            if (parts.size != 2) continue
+            val ip = validIPv4(parts[0]) ?: continue
+            val prefix = parts[1].toIntOrNull()?.takeIf { it in 0..32 } ?: continue
+            val octets = ip.split(".").map { it.toLong() }
+            val numeric = (octets[0] shl 24) or (octets[1] shl 16) or (octets[2] shl 8) or octets[3]
+            val size = 1L shl (32 - prefix)
+            val network = (numeric / size) * size
+            val first = if (prefix <= 30) network + 1 else network
+            val last = if (prefix <= 30) network + size - 2 else network + size - 1
+            if (first <= last) ranges.add(first to last)
+        }
+        if (ranges.isEmpty()) throw IOException("本地 Cloudflare IPv4 网段文件没有有效网段")
+
+        // 合并重叠/相邻网段，避免重复地址影响整体抽样概率。
+        val sorted = ranges.sortedBy { it.first }
+        val merged = mutableListOf<Pair<Long, Long>>()
+        for (range in sorted) {
+            val previous = merged.lastOrNull()
+            if (previous != null && range.first <= previous.second + 1L) {
+                merged[merged.lastIndex] = previous.first to maxOf(previous.second, range.second)
+            } else {
+                merged.add(range)
+            }
+        }
+        val counts = merged.map { it.second - it.first + 1L }
+        val total = counts.sum()
+        val wanted = 6534
+        if (total < wanted) throw IOException("官方网段可用 IPv4 数量不足 $wanted 个")
+
+        // Floyd 无放回抽样：从全部可用 IPv4 的统一编号空间中均匀抽取。
+        val random = java.util.concurrent.ThreadLocalRandom.current()
+        val chosen = HashSet<Long>(wanted * 2)
+        for (j in (total - wanted) until total) {
+            val candidate = random.nextLong(j + 1L)
+            if (!chosen.add(candidate)) chosen.add(j)
+        }
+        val indexes = chosen.sorted()
+        val result = ArrayList<String>(wanted)
+        var rangeIndex = 0
+        var rangeStartIndex = 0L
+        for (index in indexes) {
+            while (rangeIndex < merged.size - 1 && index >= rangeStartIndex + counts[rangeIndex]) {
+                rangeStartIndex += counts[rangeIndex]
+                rangeIndex++
+            }
+            var numeric = merged[rangeIndex].first + (index - rangeStartIndex)
+            result.add("${(numeric shr 24) and 255L}.${(numeric shr 16) and 255L}.${(numeric shr 8) and 255L}.${numeric and 255L}")
+        }
+        return result
+    }
+
     private fun startTest() {
         if (!savedDataLoaded) {
             Toast.makeText(this, "本地 IP 数据仍在加载，请稍候", Toast.LENGTH_SHORT).show()
@@ -1374,11 +1455,11 @@ open class MainActivity : Activity() {
         } else ""
         val urls = prefs.getString("urls", defaults.joinToString("\n"))!!
             .lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
-        if (!localEnabled && !networkEnabled) {
+        if (!isOfficialMode && !localEnabled && !networkEnabled) {
             Toast.makeText(this, "请至少启用一个 IP 来源", Toast.LENGTH_LONG).show()
             return
         }
-        if (localEnabled && importedIPs.isEmpty() && !networkEnabled) {
+        if (!isOfficialMode && localEnabled && importedIPs.isEmpty() && !networkEnabled) {
             Toast.makeText(this, "本地来源已启用，但还没有导入 IP 文件；请启用网络来源或导入文件", Toast.LENGTH_LONG).show()
             return
         }
@@ -1412,6 +1493,11 @@ open class MainActivity : Activity() {
             try {
                 // 再次规范化本地保存内容，防止旧版本保存的重复/非规范 IP 混入测速。
                 val mergedIPs = linkedSetOf<String>()
+                if (isOfficialMode) {
+                    val officialIPs = loadOfficialRandomIPs()
+                    mergedIPs.addAll(officialIPs)
+                    sourceLog.append("官方优选：从 Cloudflare 官方网段随机抽取 ${officialIPs.size} 个不重复 IPv4\n")
+                } else {
                 if (localEnabled) {
                     val clipboardParsed = if (clipboardText.isNotBlank()) parseImported(clipboardText, false).first else emptyList()
                     val localUnique = linkedSetOf<String>().apply {
@@ -1460,6 +1546,7 @@ open class MainActivity : Activity() {
                     }
                 } else {
                     sourceLog.append("网络来源：未启用\n")
+                }
                 }
 
                 if (mergedIPs.isEmpty()) {
