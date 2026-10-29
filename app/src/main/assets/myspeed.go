@@ -57,6 +57,15 @@ var (
 	)
 )
 
+type IPMetadata struct {
+	DataCenter string  `json:"colo"`
+	CountryCode string `json:"country"`
+	SourceLocation string `json:"sourceLocation"`
+	LatencyMs float64 `json:"latencyMs"`
+	Region string `json:"region"`
+	City string `json:"city"`
+}
+
 type Result struct {
 	IP      string
 	Speed   float64
@@ -594,6 +603,7 @@ func main() {
 
 	customSourceMode := false
 	connectOnly := false
+	speedOnly := false
 	var customSourceURLs []string
 	sourceArgStart := 6
 
@@ -615,9 +625,15 @@ func main() {
 				sourceArgStart = 7
 			}
 		}
-		if len(os.Args) > 7 && os.Args[7] == "connect-only" {
-			connectOnly = true
-			sourceArgStart = 8
+		if len(os.Args) > 7 {
+			switch os.Args[7] {
+			case "connect-only":
+				connectOnly = true
+				sourceArgStart = 8
+			case "speed-only":
+				speedOnly = true
+				sourceArgStart = 8
+			}
 		}
 		customSourceURLs = os.Args[sourceArgStart:]
 	}
@@ -656,11 +672,35 @@ func main() {
 	fmt.Println("最低有效下载量：64 KiB")
 	fmt.Println("最低打印速度：0.5M")
 
-	// 第一阶段：检测所有 IP 的 HTTPS 连通性和延迟。
-	connected := runStage(
-		"第一阶段：HTTPS 连通性检测与延迟测量",
-		ips, connectN, target,
-	)
+	var connected []Result
+	if speedOnly {
+		// 官方优选已完成连通性检测；复用当前数据中心的合格 IP 和元数据，不再次检测连通性。
+		metadataByIP := map[string]IPMetadata{}
+		if data, readErr := os.ReadFile("ip_metadata.json"); readErr == nil {
+			_ = json.Unmarshal(data, &metadataByIP)
+		}
+		connected = make([]Result, 0, len(ips))
+		for _, ip := range ips {
+			meta := metadataByIP[ip]
+			connected = append(connected, Result{
+				IP: ip,
+				Latency: time.Duration(meta.LatencyMs * float64(time.Millisecond)),
+				LatencyMs: int64(meta.LatencyMs),
+				DataCenter: meta.DataCenter,
+				CountryCode: meta.CountryCode,
+				SourceLocation: meta.SourceLocation,
+				Region: meta.Region,
+				City: meta.City,
+			})
+		}
+		fmt.Printf("\n官方优选：复用已通过连通性测试的 %d 个 IP，跳过连通性检测。\n", len(connected))
+	} else {
+		// 普通测速保持原有连通性检测流程。
+		connected = runStage(
+			"第一阶段：HTTPS 连通性检测与延迟测量",
+			ips, connectN, target,
+		)
+	}
 
 	fmt.Printf("\nHTTPS 连通：%d 个 | 不通：%d 个\n",
 		len(connected), len(ips)-len(connected))
