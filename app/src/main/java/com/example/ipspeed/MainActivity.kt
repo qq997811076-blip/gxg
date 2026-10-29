@@ -1845,7 +1845,9 @@ open class MainActivity : Activity() {
                     ProcessBuilder(args).directory(workingDir).redirectErrorStream(true).start().also { process = it }
                 }
                 runOnUiThread {
-                            if (generation != testGeneration) return@runOnUiThread status.text = "状态：测速进行中" }
+                    if (generation != testGeneration) return@runOnUiThread
+                    status.text = "状态：测速进行中"
+                }
                 val all = StringBuilder()
                 p.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { line ->
