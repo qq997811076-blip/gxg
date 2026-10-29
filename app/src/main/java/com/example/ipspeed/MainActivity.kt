@@ -77,6 +77,16 @@ open class MainActivity : Activity() {
         val countries: Map<String, String>
     )
 
+    private data class OfficialCandidate(
+        val ip: String,
+        val colo: String,
+        val country: String,
+        val sourceLocation: String,
+        val latencyMs: Double,
+        val region: String,
+        val city: String
+    )
+
     private data class IPv4CidrRange(
         val cidr: String,
         val network: Long,
@@ -90,6 +100,8 @@ open class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var resultsView: TextView
     private lateinit var dataCenterSummaryView: TextView
+    private lateinit var dataCenterRowsContainer: LinearLayout
+    private var officialQualifiedByDataCenter: Map<String, List<OfficialCandidate>> = emptyMap()
     private lateinit var targetInput: EditText
     private lateinit var targetPresetSpinner: Spinner
     private var updatingTargetPreset = false
@@ -658,7 +670,9 @@ open class MainActivity : Activity() {
 
         root.addView(label("一、测速操作", 18f))
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        controls.addView(button("开始测速") { startTest() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
+        controls.addView(button(if (isOfficialMode) "开始连通性测试" else "开始测速") {
+            if (isOfficialMode) startTest(connectivityOnly = true) else startTest()
+        }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
         controls.addView(button("停止测速") { stopTest() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
         root.addView(controls)
 
@@ -672,12 +686,19 @@ open class MainActivity : Activity() {
         status = label("状态：待开始", 14f)
         status.setPadding(0, dp(2), 0, dp(8))
         root.addView(status)
-        root.addView(label("合格结果（按速度从高到低）", 16f))
+        root.addView(label(if (isOfficialMode) "合格结果（按数据中心分类）" else "合格结果（按速度从高到低）", 16f))
         resultsView = label("暂无结果")
         resultsView.textSize = 14f
         resultsView.setPadding(dp(12), dp(12), dp(12), dp(12))
         resultsView.setBackgroundColor(0xFFF1F3F4.toInt())
         root.addView(resultsView, LinearLayout.LayoutParams(-1, dp(320)))
+        if (isOfficialMode) {
+            dataCenterRowsContainer = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(4), 0, dp(4))
+            }
+            root.addView(dataCenterRowsContainer, LinearLayout.LayoutParams(-1, -2))
+        }
         root.addView(label("数据中心汇总", 16f))
         dataCenterSummaryView = label("暂无数据中心统计", 13f)
         dataCenterSummaryView.setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -1438,7 +1459,7 @@ open class MainActivity : Activity() {
         }
     }
 
-    private fun startTest() {
+    private fun startTest(connectivityOnly: Boolean = false, selectedIPs: List<String>? = null) {
         if (!savedDataLoaded) {
             Toast.makeText(this, "本地 IP 数据仍在加载，请稍候", Toast.LENGTH_SHORT).show()
             return
@@ -1518,10 +1539,13 @@ open class MainActivity : Activity() {
             return
         }
 
+        // 按指定数据中心测速时，所有合格 IP 都参与；普通模式仍使用原来的低延迟数量参数。
+        val effectiveTopN = selectedIPs?.size ?: topN
         // Android 原生网络栈读取 IP 来源，避免 Go 纯 Go DNS 解析器误用 ::1:53。
         val args = mutableListOf(
-            binary.absolutePath, target, connectN.toString(), downloadN.toString(), topN.toString(), "no", downloadCapBytes.toString()
+            binary.absolutePath, target, connectN.toString(), downloadN.toString(), effectiveTopN.toString(), "no", downloadCapBytes.toString()
         )
+        if (connectivityOnly) args.add("connect-only")
         resultLines = emptyList()
         resultsView.text = "正在准备测速…"
         status.text = "状态：正在启动"
@@ -1534,7 +1558,10 @@ open class MainActivity : Activity() {
             val runCountryCodes = linkedMapOf<String, String>()
             try {
                 val mergedIPs = linkedSetOf<String>()
-                if (isOfficialMode) {
+                if (selectedIPs != null) {
+                    mergedIPs.addAll(selectedIPs)
+                    sourceLog.append("官方优选：仅对当前数据中心的 ${mergedIPs.size} 个合格 IP 开始测速\n")
+                } else if (isOfficialMode) {
                     val rangesFile = File(filesDir, "cloudflare_ipv4_ranges.txt")
                     var refreshed = false
                     var ranges = loadCloudflareIPv4Ranges(rangesFile)
@@ -1644,6 +1671,55 @@ open class MainActivity : Activity() {
                     }
                 }
                 val exitCode = p.waitFor()
+                if (connectivityOnly) {
+                    val candidates = all.toString().lineSequence()
+                        .map { it.trim() }
+                        .filter { it.startsWith("CONNECT|") }
+                        .mapNotNull { line ->
+                            val fields = line.split("|")
+                            if (fields.size < 8) return@mapNotNull null
+                            val ip = validIPv4(fields[1]) ?: return@mapNotNull null
+                            OfficialCandidate(
+                                ip = ip,
+                                colo = fields[2].ifBlank { "UNK" },
+                                country = fields[3].ifBlank { "XX" },
+                                sourceLocation = fields[4].ifBlank { "XX" },
+                                latencyMs = fields[5].toDoubleOrNull() ?: Double.MAX_VALUE,
+                                region = fields[6],
+                                city = fields[7]
+                            )
+                        }
+                        .distinctBy { it.ip }
+                        .toList()
+                    runOnUiThread {
+                        process = null
+                        if (exitCode != 0) {
+                            resultsView.text = (sourceLog.toString() + all.toString()).takeLast(6000)
+                            status.text = "状态：连通性测试异常退出（代码 $exitCode）"
+                        } else {
+                            officialQualifiedByDataCenter = candidates
+                                .groupBy { it.colo }
+                                .toSortedMap()
+                                .mapValues { (_, rows) ->
+                                    rows.sortedWith(compareBy<OfficialCandidate> { it.latencyMs }.thenBy { it.ip })
+                                }
+                            resultsView.text = if (officialQualifiedByDataCenter.isEmpty()) {
+                                "没有通过连通性测试的 IP"
+                            } else {
+                                officialQualifiedByDataCenter.entries.joinToString("\n\n") { (colo, rows) ->
+                                    val country = rows.firstOrNull()?.country ?: "XX"
+                                    "$colo-$country（${rows.size} 个合格 IP）\n" +
+                                        rows.joinToString("\n") { it.ip }
+                                }
+                            }
+                            renderOfficialDataCenterRows()
+                            val qualifiedCount = candidates.size
+                            status.text = "状态：连通性测试完成；合格 IP $qualifiedCount 个；未自动测速"
+                            dataCenterSummaryView.text = "连通性测试完成：${officialQualifiedByDataCenter.size} 个数据中心，$qualifiedCount 个合格 IP。点击对应数据中心的“开始测速”进行单独测速。"
+                        }
+                    }
+                    return@execute
+                }
                 val parsedRaw = all.toString().lineSequence()
                     .map { it.trim() }
                     .filter { line ->
@@ -1714,6 +1790,63 @@ open class MainActivity : Activity() {
                 }
             }
         }
+    }
+
+    private fun renderOfficialDataCenterRows() {
+        if (!isOfficialMode || !::dataCenterRowsContainer.isInitialized) return
+        dataCenterRowsContainer.removeAllViews()
+        if (officialQualifiedByDataCenter.isEmpty()) {
+            dataCenterRowsContainer.addView(label("暂无合格数据中心", 13f))
+            return
+        }
+        officialQualifiedByDataCenter.forEach { (colo, candidates) ->
+            val first = candidates.firstOrNull()
+            val country = first?.country ?: "XX"
+            val minLatency = candidates.minOfOrNull { it.latencyMs } ?: Double.MAX_VALUE
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(3), 0, dp(3))
+            }
+            row.addView(TextView(this).apply {
+                text = "$colo-$country"
+                textSize = 13f
+                gravity = Gravity.CENTER_VERTICAL
+                maxLines = 2
+            }, LinearLayout.LayoutParams(0, -2, 1.05f))
+            row.addView(TextView(this).apply {
+                text = "${candidates.size} 个"
+                textSize = 12f
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(0, -2, 0.72f))
+            row.addView(TextView(this).apply {
+                text = if (minLatency == Double.MAX_VALUE) "未知" else String.format(Locale.getDefault(), "%.2f ms", minLatency)
+                textSize = 12f
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(0, -2, 1.0f))
+            row.addView(button("开始测速") {
+                startOfficialDataCenterSpeedTest(colo)
+            }.apply {
+                textSize = 11f
+                isAllCaps = false
+                minWidth = 0
+                minimumWidth = 0
+                setPadding(dp(3), 0, dp(3), 0)
+            }, LinearLayout.LayoutParams(dp(88), -2))
+            dataCenterRowsContainer.addView(row, LinearLayout.LayoutParams(-1, -2))
+            dataCenterRowsContainer.addView(View(this).apply {
+                setBackgroundColor(0xFFD9DDE2.toInt())
+            }, LinearLayout.LayoutParams(-1, dp(1)))
+        }
+    }
+
+    private fun startOfficialDataCenterSpeedTest(colo: String) {
+        val candidates = officialQualifiedByDataCenter[colo].orEmpty()
+        if (candidates.isEmpty()) {
+            Toast.makeText(this, "该数据中心没有合格 IP", Toast.LENGTH_SHORT).show()
+            return
+        }
+        startTest(connectivityOnly = false, selectedIPs = candidates.map { it.ip })
     }
 
     private fun resultSpeed(line: String): Double {
