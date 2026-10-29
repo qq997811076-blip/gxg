@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - add-official-independent-ui-20261029
+      - official-cf-ip-random-65534-20261029
   workflow_dispatch:
 
 permissions:
