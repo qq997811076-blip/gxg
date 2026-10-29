@@ -707,8 +707,8 @@ open class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(-1, -2))
         if (isOfficialMode) {
             officialAutoSpeedCheck = CheckBox(this).apply {
-                text = "自动测速"
-                textSize = 14f
+                text = ""
+                textSize = 15f
                 isChecked = prefs.getBoolean("official_auto_speed_enabled", false)
                 setPadding(0, 0, 0, 0)
                 setOnCheckedChangeListener { _, checked ->
@@ -718,14 +718,31 @@ open class MainActivity : Activity() {
         }
         val stopColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         stopColumn.addView(button("停止测速") { stopTest() }, LinearLayout.LayoutParams(-1, -2))
+        controls.addView(startColumn, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
+        controls.addView(stopColumn, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
+        root.addView(controls)
+
         if (isOfficialMode) {
-            stopColumn.addView(officialAutoSpeedCheck, LinearLayout.LayoutParams(-1, -2))
+            val optionRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val speedOption = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            speedOption.addView(label("开始测速", 16f).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(4), dp(2), dp(4))
+            }, LinearLayout.LayoutParams(-2, -2))
+            speedOption.addView(officialAutoSpeedCheck, LinearLayout.LayoutParams(-2, -2))
+            optionRow.addView(speedOption, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
+
             val dataCenterRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                translationX = -dp(4).toFloat()
             }
-            dataCenterRow.addView(label("数据中心", 14f).apply {
+            dataCenterRow.addView(label("数据中心", 16f).apply {
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(0, dp(4), dp(4), dp(4))
             }, LinearLayout.LayoutParams(-2, -2))
@@ -733,7 +750,7 @@ open class MainActivity : Activity() {
                 "留空则选择最低延迟",
                 prefs.getString("official_auto_speed_datacenter", "").orEmpty()
             ).apply {
-                textSize = 14f
+                textSize = 15f
                 setSingleLine(true)
                 addTextChangedListener(object : android.text.TextWatcher {
                     override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -744,11 +761,9 @@ open class MainActivity : Activity() {
                 })
             }
             dataCenterRow.addView(officialDataCenterInput, LinearLayout.LayoutParams(0, -2, 1f))
-            stopColumn.addView(dataCenterRow, LinearLayout.LayoutParams(-1, -2))
+            optionRow.addView(dataCenterRow, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
+            root.addView(optionRow, LinearLayout.LayoutParams(-1, -2))
         }
-        controls.addView(startColumn, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
-        controls.addView(stopColumn, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
-        root.addView(controls)
 
         val resultHeaderRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -807,10 +822,12 @@ open class MainActivity : Activity() {
             resultsFrame.addView(officialDataCenterScroll, LinearLayout.LayoutParams(-1, 0, 1f))
         }
         root.addView(resultsFrame, LinearLayout.LayoutParams(-1, dp(320)))
-        root.addView(label("数据中心汇总", 16f))
         dataCenterSummaryView = label("暂无数据中心统计", 13f)
         dataCenterSummaryView.setPadding(dp(12), dp(8), dp(12), dp(8))
-        root.addView(dataCenterSummaryView)
+        if (!isOfficialMode) {
+            root.addView(label("数据中心汇总", 16f))
+            root.addView(dataCenterSummaryView)
+        }
 
 
         val parameterHeaderRow = LinearLayout(this).apply {
@@ -827,7 +844,7 @@ open class MainActivity : Activity() {
             isChecked = prefs.getBoolean("download_cap_enabled", true)
             setPadding(0, 0, 0, 0)
         }
-        downloadCapInput = edit("1", prefs.getString("download_cap_mib", "1").orEmpty()).apply {
+        downloadCapInput = edit("5", prefs.getString("download_cap_mib", "5").orEmpty()).apply {
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             setSingleLine(true)
             textSize = 14f
@@ -866,9 +883,9 @@ open class MainActivity : Activity() {
         targetPresetSpinner.setSelection(initialPresetPosition, false)
         lastTargetPresetPosition = initialPresetPosition
         setTargetPreset(initialPresetPosition, clearCustomInput = false)
-        connectInput = edit("连通性并发数", prefs.getString("connectN", "300")!!)
-        downloadInput = edit("下载测速并发数", prefs.getString("downloadN", "100")!!)
-        topNInput = edit("参与下载测速的低延迟 IP 数量", prefs.getString("topN", "20")!!)
+        connectInput = edit("连通性并发数", prefs.getString("connectN", "1000")!!)
+        downloadInput = edit("下载测速并发数", prefs.getString("downloadN", "3")!!)
+        topNInput = edit("参与下载测速的低延迟 IP 数量", prefs.getString("topN", "10")!!)
         thresholdInput = edit("最低显示速度（MiB/s）", prefs.getString("threshold", "0.5")!!)
         root.addView(label("测速网址", 14f))
         val targetRow = LinearLayout(this).apply {
@@ -1884,14 +1901,15 @@ open class MainActivity : Activity() {
                     val latency = fields.getOrNull(4)?.toLongOrNull() ?: Long.MAX_VALUE
                     val region = fields.getOrNull(5).orEmpty()
                     val city = fields.getOrNull(6).orEmpty()
-                    listOf(colo, country, latency.toString(), region, city)
+                    listOf(colo, country, latency.toString(), region, city, ip)
                 }.filter { it[0] != "UNK" }
                 val dcSummary = dcStats.groupBy { it[0] }.entries.sortedBy { it.key }.map { (colo, rows) ->
                     val first = rows.first()
                     val validLatencies = rows.mapNotNull { it[2].toLongOrNull() }.filter { it != Long.MAX_VALUE }
                     val minLatency = validLatencies.minOrNull()?.let { "${it} ms" } ?: "未知"
                     val location = listOf(first[3], first[4]).filter { it.isNotBlank() }.distinct().joinToString(" / ")
-                    "$colo-${first[1]}：${rows.size} 个 IP；最低延迟 $minLatency" +
+                    val sourceIPs = rows.map { it[5] }.distinct().joinToString("、")
+                    "$colo-${first[1]}（$sourceIPs）：${rows.size} 个 IP；最低延迟 $minLatency" +
                         if (location.isNotBlank()) "；$location" else ""
                 }
                 resultLines = parsed
