@@ -162,8 +162,7 @@ open class MainActivity : Activity() {
         return filtered
     }
 
-    private val targetPresetLabels = arrayOf("自动选择", "Cloudflare", "CM提供", "移动专属", "手动输入")
-    private val autoTargetLabel = "自动选择"
+    private val targetPresetLabels = arrayOf("Cloudflare", "CM提供", "移动专属", "手动输入")
     private val defaultTargetUrl = "https://speed.cloudflare.com/__down?bytes=50000000"
     private val cloudflareTargetUrl = "https://speed.cloudflare.com/__down?bytes=99999999"
     private val cmTargetUrl = "https://cf.090227.xyz/__down?bytes=99999999"
@@ -588,10 +587,9 @@ open class MainActivity : Activity() {
     private fun currentTargetPreset(): String =
         if (::targetPresetSpinner.isInitialized) {
             when (targetPresetSpinner.selectedItemPosition) {
-                0 -> "auto"
-                1 -> "cloudflare"
-                2 -> "cm"
-                3 -> "mobile"
+                0 -> "cloudflare"
+                1 -> "cm"
+                2 -> "mobile"
                 else -> "custom"
             }
         } else {
@@ -625,24 +623,18 @@ open class MainActivity : Activity() {
         updatingTargetPreset = true
         when (position) {
             0 -> {
-                targetInput.setText(autoTargetLabel)
-                targetInput.isFocusable = false
-                targetInput.isFocusableInTouchMode = false
-                targetInput.isCursorVisible = false
-            }
-            1 -> {
                 targetInput.isFocusable = true
                 targetInput.isFocusableInTouchMode = true
                 targetInput.isCursorVisible = true
                 targetInput.setText(cloudflareTargetUrl)
             }
-            2 -> {
+            1 -> {
                 targetInput.isFocusable = true
                 targetInput.isFocusableInTouchMode = true
                 targetInput.isCursorVisible = true
                 targetInput.setText(cmTargetUrl)
             }
-            3 -> {
+            2 -> {
                 targetInput.isFocusable = true
                 targetInput.isFocusableInTouchMode = true
                 targetInput.isCursorVisible = true
@@ -667,7 +659,7 @@ open class MainActivity : Activity() {
     private fun resetTargetPreset() {
         targetPresetSpinner.setSelection(0)
         setTargetPreset(0)
-        Toast.makeText(this, "测速网址已恢复自动选择", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "测速网址已恢复 Cloudflare", Toast.LENGTH_SHORT).show()
     }
 
     private fun saveMainSettings(): Boolean {
@@ -798,6 +790,7 @@ open class MainActivity : Activity() {
                 })
             }
             dataCenterRow.addView(officialDataCenterInput, LinearLayout.LayoutParams(0, -2, 1f))
+            dataCenterRow.translationX = -dp(48).toFloat()
             optionRow.addView(dataCenterRow, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
             root.addView(optionRow, LinearLayout.LayoutParams(-1, -2))
         }
@@ -908,10 +901,10 @@ open class MainActivity : Activity() {
             ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         }
         val initialPresetPosition = when (savedPreset) {
-            "cloudflare" -> 1
-            "cm" -> 2
-            "mobile" -> 3
-            "custom" -> 4
+            "cloudflare" -> 0
+            "cm" -> 1
+            "mobile" -> 2
+            "custom" -> 3
             else -> 0
         }
         targetPresetSpinner.setSelection(initialPresetPosition, false)
@@ -935,9 +928,9 @@ open class MainActivity : Activity() {
                 if (updatingTargetPreset) return
                 val previousPosition = lastTargetPresetPosition
                 lastTargetPresetPosition = position
-                setTargetPreset(position, clearCustomInput = position == 4 && previousPosition != 4)
+                setTargetPreset(position, clearCustomInput = position == 3 && previousPosition != 3)
                 saveMainSettings()
-                if (position == 4) {
+                if (position == 3) {
                     targetInput.post {
                         targetInput.requestFocus()
                         targetInput.setSelection(targetInput.text.length)
@@ -950,10 +943,10 @@ open class MainActivity : Activity() {
         targetInput.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                if (!updatingTargetPreset && targetPresetSpinner.selectedItemPosition != 4) {
+                if (!updatingTargetPreset && targetPresetSpinner.selectedItemPosition != 3) {
                     updatingTargetPreset = true
-                    lastTargetPresetPosition = 4
-                    targetPresetSpinner.setSelection(4)
+                    lastTargetPresetPosition = 3
+                    targetPresetSpinner.setSelection(3)
                     updatingTargetPreset = false
                     prefs.edit().putString("targetPreset", "custom").commit()
                 }
