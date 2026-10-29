@@ -7,6 +7,7 @@ on:
       - add-official-independent-ui-20261029
       - official-cf-ip-random-65534-20261029
       - ui-two-mode-switch-20261029
+      - official-connectivity-groups-20261030
   workflow_dispatch:
 
 permissions:
