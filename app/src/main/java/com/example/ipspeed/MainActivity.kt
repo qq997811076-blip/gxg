@@ -1649,7 +1649,8 @@ open class MainActivity : Activity() {
                     status.text = "状态：即将测速，共 ${finalIPs.size} 个唯一 IP"
                     resultsView.text = sourceLog.toString()
                 }
-                val p = ProcessBuilder(args).directory(workingDir).redirectErrorStream(true).start()
+                val processArgs = if (isOfficialMode) args + "--connectivity-only" else args
+                val p = ProcessBuilder(processArgs).directory(workingDir).redirectErrorStream(true).start()
                 process = p
                 runOnUiThread { status.text = "状态：测速进行中" }
                 val all = StringBuilder()
@@ -1662,6 +1663,46 @@ open class MainActivity : Activity() {
                     }
                 }
                 val exitCode = p.waitFor()
+                if (isOfficialMode) {
+                    val connectedRows = all.toString().lineSequence()
+                        .map { it.trim() }
+                        .filter { it.startsWith("CONNECTED|") }
+                        .mapNotNull { line ->
+                            val fields = line.split("|")
+                            val ip = fields.getOrNull(1).orEmpty()
+                            if (ip.isBlank()) null else {
+                                val colo = fields.getOrNull(2).orEmpty().ifBlank { "UNK" }
+                                val country = fields.getOrNull(3).orEmpty().ifBlank { "XX" }
+                                val sourceLocation = fields.getOrNull(4).orEmpty().ifBlank { "XX" }
+                                val latency = fields.getOrNull(5)?.toLongOrNull() ?: Long.MAX_VALUE
+                                val region = fields.getOrNull(6).orEmpty()
+                                val city = fields.getOrNull(7).orEmpty()
+                                "$ip#0M|$colo|$country|$sourceLocation|$latency|$region|$city"
+                            }
+                        }
+                        .toList()
+                    officialRawByDataCenter = connectedRows
+                        .groupBy { it.split("|").getOrNull(1).orEmpty().ifBlank { "UNK" } }
+                    officialIPsByDataCenter = officialRawByDataCenter.mapValues { (_, rows) ->
+                        rows.mapNotNull { it.substringBefore("|").substringBefore("#").takeIf(String::isNotBlank) }.distinct()
+                    }
+                    val connectedCount = officialIPsByDataCenter.values.sumOf { it.size }
+                    runOnUiThread {
+                        process = null
+                        renderOfficialDataCenterSummary()
+                        resultsView.text = if (connectedCount == 0) {
+                            "连通性检测已结束，没有合格 IP。\\n\\n" + sourceLog.toString()
+                        } else {
+                            "连通性检测已结束：共 $connectedCount 个合格 IP，分布在 ${officialIPsByDataCenter.size} 个数据中心。\\n请在下方数据中心汇总中，点击对应的“开始测速”。"
+                        }
+                        status.text = if (exitCode == 0) {
+                            "状态：连通性检测完成；合格 $connectedCount 个 IP，等待选择数据中心"
+                        } else {
+                            "状态：连通性检测结束，程序退出代码 $exitCode；合格 $connectedCount 个 IP"
+                        }
+                    }
+                    return@execute
+                }
                 val parsedRaw = all.toString().lineSequence()
                     .map { it.trim() }
                     .filter { line ->
@@ -1769,9 +1810,11 @@ open class MainActivity : Activity() {
                 setPadding(dp(2), dp(2), dp(2), dp(2))
             }
             val count = rows.map { it.substringBefore("|").substringBefore("#") }.distinct().size
-            val info = label("$colo  合格IP：${count}  最低延迟：${minLatency}", 13f).apply {
-                setPadding(0, dp(6), dp(4), dp(6))
-                maxLines = 2
+            val info = label("$colo  合格：$count  最低延迟：$minLatency", 11f).apply {
+                setPadding(0, dp(4), dp(2), dp(4))
+                maxLines = 1
+                singleLine = true
+                ellipsize = android.text.TextUtils.TruncateAt.END
             }
             row.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
             row.addView(button("开始测速") { startOfficialDataCenterRetest(colo) }, LinearLayout.LayoutParams(-2, -2))
@@ -1797,9 +1840,11 @@ open class MainActivity : Activity() {
                 ipFile.writeText(ips.joinToString("\n") + "\n", Charsets.UTF_8)
                 runOnUiThread {
                     status.text = "状态：正在复测 $colo，共 ${ips.size} 个 IP"
-                    resultsView.text = "正在对 $colo 的 ${ips.size} 个初筛合格 IP 进行二次测速…"
+                    resultsView.text = "正在对 $colo 的 ${ips.size} 个初筛合格 IP 进行测速…"
                 }
-                val p = ProcessBuilder(officialCoreArgs).directory(workDir).redirectErrorStream(true).start()
+                val speedArgs = officialCoreArgs.toMutableList()
+                if (speedArgs.size > 4) speedArgs[4] = ips.size.toString()
+                val p = ProcessBuilder(speedArgs).directory(workDir).redirectErrorStream(true).start()
                 process = p
                 val output = StringBuilder()
                 p.inputStream.bufferedReader().useLines { lines -> lines.forEach { output.append(it).append('\n') } }
@@ -1824,14 +1869,14 @@ open class MainActivity : Activity() {
                 runOnUiThread {
                     process = null
                     renderOfficialDataCenterSummary()
-                    resultsView.text = if (visible.isEmpty()) "$colo 二次测速没有合格 IP" else "$colo 二次测速合格结果（${visible.size} 个）\n" + visible.joinToString("\n")
-                    status.text = if (exitCode == 0) "状态：$colo 二次测速完成；合格 ${passedIPs.size} 个" else "状态：$colo 二次测速结束，程序退出代码 $exitCode；合格 ${passedIPs.size} 个"
+                    resultsView.text = if (visible.isEmpty()) "$colo 测速没有合格 IP" else "$colo 测速合格结果（${visible.size} 个）\n" + visible.joinToString("\n")
+                    status.text = if (exitCode == 0) "状态：$colo 测速完成；合格 ${passedIPs.size} 个" else "状态：$colo 测速结束，程序退出代码 $exitCode；合格 ${passedIPs.size} 个"
                 }
             } catch (e: Exception) {
                 runOnUiThread {
                     process = null
-                    status.text = "状态：$colo 二次测速失败"
-                    resultsView.text = "二次测速失败：${e.message ?: e.javaClass.simpleName}"
+                    status.text = "状态：$colo 测速失败"
+                    resultsView.text = "测速失败：${e.message ?: e.javaClass.simpleName}"
                 }
             }
         }
