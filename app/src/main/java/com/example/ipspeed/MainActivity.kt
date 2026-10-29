@@ -129,6 +129,7 @@ open class MainActivity : Activity() {
     private lateinit var dataCenterSummaryView: TextView
     private lateinit var dataCenterRowsContainer: LinearLayout
     private var officialDataCenterScroll: ScrollView? = null
+    private var officialViewToggleButton: Button? = null
     private var officialQualifiedByDataCenter: Map<String, List<OfficialCandidate>> = emptyMap()
     private lateinit var targetInput: EditText
     private lateinit var targetPresetSpinner: Spinner
@@ -897,9 +898,15 @@ open class MainActivity : Activity() {
             LinearLayout.LayoutParams(0, -2, 1f)
         )
         if (isOfficialMode) {
-            qualifiedHeaderRow.addView(button("返回数据中心") {
-                showOfficialDataCenterList()
-            }, LinearLayout.LayoutParams(-2, -2))
+            val toggleButton = button("返回数据中心") {
+                if (officialDataCenterScroll?.visibility == View.VISIBLE) {
+                    showOfficialSpeedResults()
+                } else {
+                    showOfficialDataCenterList()
+                }
+            }
+            officialViewToggleButton = toggleButton
+            qualifiedHeaderRow.addView(toggleButton, LinearLayout.LayoutParams(-2, -2))
         }
         root.addView(qualifiedHeaderRow)
 
@@ -2203,12 +2210,14 @@ open class MainActivity : Activity() {
         val scroll = officialDataCenterScroll ?: return
         resultsView.visibility = View.GONE
         scroll.visibility = View.VISIBLE
+        officialViewToggleButton?.text = "返回测试结果"
     }
 
     private fun showOfficialSpeedResults() {
         if (!isOfficialMode) return
         resultsView.visibility = View.VISIBLE
         officialDataCenterScroll?.visibility = View.GONE
+        officialViewToggleButton?.text = "返回数据中心"
     }
 
     private fun startOfficialDataCenterSpeedTest(colo: String) {
