@@ -1481,8 +1481,12 @@ open class MainActivity : Activity() {
         }
 
         val binary = File(filesDir, if (isOfficialMode) "official_sss" else "sss")
-        val ipFile = File(filesDir, if (isOfficialMode) "official_ips.txt" else "ips.txt")
+        val workDir = if (isOfficialMode) File(filesDir, "official_work") else filesDir
+        val ipFile = File(workDir, "ips.txt")
         try {
+            if (isOfficialMode && !workDir.exists() && !workDir.mkdirs()) {
+                throw IOException("无法创建官方优选工作目录")
+            }
             if (!binary.exists()) assets.open("sss").use { input ->
                 FileOutputStream(binary).use { output -> input.copyTo(output) }
             }
@@ -1585,7 +1589,7 @@ open class MainActivity : Activity() {
                     status.text = "状态：即将测速，共 ${finalIPs.size} 个唯一 IP"
                     resultsView.text = sourceLog.toString()
                 }
-                val p = ProcessBuilder(args).directory(filesDir).redirectErrorStream(true).start()
+                val p = ProcessBuilder(args).directory(workDir).redirectErrorStream(true).start()
                 process = p
                 runOnUiThread { status.text = "状态：测速进行中" }
                 val all = StringBuilder()
