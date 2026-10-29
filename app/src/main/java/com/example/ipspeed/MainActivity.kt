@@ -1691,9 +1691,9 @@ open class MainActivity : Activity() {
                         process = null
                         renderOfficialDataCenterSummary()
                         resultsView.text = if (connectedCount == 0) {
-                            "连通性检测已结束，没有合格 IP。\\n\\n" + sourceLog.toString()
+                            "连通性检测已结束，没有合格 IP。\n\n" + sourceLog.toString()
                         } else {
-                            "连通性检测已结束：共 $connectedCount 个合格 IP，分布在 ${officialIPsByDataCenter.size} 个数据中心。\\n请在下方数据中心汇总中，点击对应的“开始测速”。"
+                            "连通性检测已结束：共 $connectedCount 个合格 IP，分布在 ${officialIPsByDataCenter.size} 个数据中心。\n请在下方数据中心汇总中，点击对应的“开始测速”。"
                         }
                         status.text = if (exitCode == 0) {
                             "状态：连通性检测完成；合格 $connectedCount 个 IP，等待选择数据中心"
@@ -1813,7 +1813,7 @@ open class MainActivity : Activity() {
             val info = label("$colo  合格：$count  最低延迟：$minLatency", 11f).apply {
                 setPadding(0, dp(4), dp(2), dp(4))
                 maxLines = 1
-                singleLine = true
+                isSingleLine = true
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }
             row.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
@@ -1860,10 +1860,6 @@ open class MainActivity : Activity() {
                 }
                 val passedRaw = raw.filterIndexed { index, _ -> formatted.getOrNull(index)?.let { resultSpeed(it) >= officialThresholdValue } == true }
                 val passedIPs = passedRaw.mapNotNull { it.substringBefore("|").substringBefore("#").takeIf(String::isNotBlank) }.distinct()
-                officialRawByDataCenter = officialRawByDataCenter.toMutableMap().apply { put(colo, passedRaw) }
-                officialIPsByDataCenter = officialRawByDataCenter.mapValues { (_, values) ->
-                    values.mapNotNull { it.substringBefore("|").substringBefore("#").takeIf(String::isNotBlank) }.distinct()
-                }
                 resultLines = formatted.filterIndexed { index, _ -> raw.getOrNull(index)?.let { it in passedRaw } == true }
                 val visible = filterResults(resultLines, officialThresholdValue)
                 runOnUiThread {
