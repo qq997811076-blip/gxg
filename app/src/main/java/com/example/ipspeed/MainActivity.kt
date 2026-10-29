@@ -138,6 +138,8 @@ open class MainActivity : Activity() {
     private lateinit var localCheck: CheckBox
     private lateinit var networkCheck: CheckBox
     private lateinit var sourceStats: TextView
+    private lateinit var officialAutoSpeedCheck: CheckBox
+    private lateinit var officialDataCenterInput: EditText
 
     private val defaults = listOf(
         "https://zip.cm.edu.kg/all.txt",
@@ -695,11 +697,55 @@ open class MainActivity : Activity() {
         root.addView(label(if (isOfficialMode) "测速参数与上传方式集中管理" else "测速参数、IP 来源、上传方式集中管理", 13f))
 
         root.addView(label("一、测速操作", 18f))
-        val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        controls.addView(button(if (isOfficialMode) "开始连通性测试" else "开始测速") {
+        val controls = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.TOP
+        }
+        val startColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        startColumn.addView(button(if (isOfficialMode) "开始连通性测试" else "开始测速") {
             if (isOfficialMode) startTest(connectivityOnly = true) else startTest()
-        }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
-        controls.addView(button("停止测速") { stopTest() }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
+        }, LinearLayout.LayoutParams(-1, -2))
+        if (isOfficialMode) {
+            officialAutoSpeedCheck = CheckBox(this).apply {
+                text = "自动测速"
+                isChecked = prefs.getBoolean("official_auto_speed_enabled", false)
+                setPadding(0, 0, 0, 0)
+                setOnCheckedChangeListener { _, checked ->
+                    prefs.edit().putBoolean("official_auto_speed_enabled", checked).commit()
+                }
+            }
+            startColumn.addView(officialAutoSpeedCheck, LinearLayout.LayoutParams(-1, -2))
+        }
+        val stopColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        stopColumn.addView(button("停止测速") { stopTest() }, LinearLayout.LayoutParams(-1, -2))
+        if (isOfficialMode) {
+            val dataCenterRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            dataCenterRow.addView(label("数据中心", 13f).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(4), dp(4), dp(4))
+            }, LinearLayout.LayoutParams(-2, -2))
+            officialDataCenterInput = edit(
+                "留空则选择最低延迟",
+                prefs.getString("official_auto_speed_datacenter", "").orEmpty()
+            ).apply {
+                textSize = 14f
+                setSingleLine(true)
+                addTextChangedListener(object : android.text.TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                        prefs.edit().putString("official_auto_speed_datacenter", s?.toString().orEmpty()).apply()
+                    }
+                    override fun afterTextChanged(s: android.text.Editable?) {}
+                })
+            }
+            dataCenterRow.addView(officialDataCenterInput, LinearLayout.LayoutParams(0, -2, 1f))
+            stopColumn.addView(dataCenterRow, LinearLayout.LayoutParams(-1, -2))
+        }
+        controls.addView(startColumn, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
+        controls.addView(stopColumn, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
         root.addView(controls)
 
         val resultHeaderRow = LinearLayout(this).apply {
@@ -1799,8 +1845,9 @@ open class MainActivity : Activity() {
                             renderOfficialDataCenterRows()
                             showOfficialDataCenterList()
                             val qualifiedCount = candidates.size
-                            status.text = "状态：连通性测试完成；合格 IP $qualifiedCount 个；未自动测速"
+                            status.text = "状态：连通性测试完成；合格 IP $qualifiedCount 个"
                             dataCenterSummaryView.text = "连通性测试完成：${officialQualifiedByDataCenter.size} 个数据中心，$qualifiedCount 个合格 IP。点击对应数据中心的“开始测速”进行单独测速。"
+                            runAutomaticOfficialSpeedTestIfEnabled()
                         }
                     }
                     return@execute
@@ -1967,6 +2014,37 @@ open class MainActivity : Activity() {
         }
         showOfficialSpeedResults()
         startTest(connectivityOnly = false, selectedIPs = candidates.map { it.ip })
+    }
+
+    private fun runAutomaticOfficialSpeedTestIfEnabled() {
+        if (!isOfficialMode || !::officialAutoSpeedCheck.isInitialized || !officialAutoSpeedCheck.isChecked) return
+
+        val requested = if (::officialDataCenterInput.isInitialized) {
+            officialDataCenterInput.text.toString().trim()
+        } else {
+            ""
+        }
+        val targetColo = if (requested.isBlank()) {
+            officialQualifiedByDataCenter.entries.minWithOrNull(
+                compareBy<Map.Entry<String, List<OfficialCandidate>>> {
+                    it.value.minOfOrNull { candidate -> candidate.latencyMs } ?: Double.MAX_VALUE
+                }.thenBy { it.key }
+            )?.key
+        } else {
+            officialQualifiedByDataCenter.keys.firstOrNull { it.equals(requested, ignoreCase = true) }
+        }
+
+        if (targetColo == null) {
+            val message = if (requested.isBlank()) {
+                "暂无合格数据中心，本次不测速"
+            } else {
+                "未找到数据中心：$requested，本次不测速"
+            }
+            status.text = "状态：$message"
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            return
+        }
+        startOfficialDataCenterSpeedTest(targetColo)
     }
 
     private fun resultSpeed(line: String): Double {
