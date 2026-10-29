@@ -620,15 +620,15 @@ open class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         titleRow.addView(label("IP 测速", 26f), LinearLayout.LayoutParams(0, -2, 1f))
-        titleRow.addView(button("官方优选") {
+        titleRow.addView(button(if (isOfficialMode) "个性优选" else "官方优选") {
             if (isOfficialMode) {
-                Toast.makeText(this, "当前已在官方优选界面", Toast.LENGTH_SHORT).show()
+                finish()
             } else {
                 startActivity(Intent(this, OfficialActivity::class.java))
             }
         }, LinearLayout.LayoutParams(-2, -2))
         root.addView(titleRow, LinearLayout.LayoutParams(-1, -2))
-        root.addView(label("测速参数、IP 来源、上传方式集中管理", 13f))
+        root.addView(label(if (isOfficialMode) "测速参数与上传方式集中管理" else "测速参数、IP 来源、上传方式集中管理", 13f))
 
         root.addView(label("一、测速操作", 18f))
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -773,54 +773,58 @@ open class MainActivity : Activity() {
         filterRow.addView(thresholdBox, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(filterRow)
 
-        root.addView(label("四、IP 来源", 18f))
-        root.addView(label("本地文件导入", 15f))
-        val localImportRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        localImportRow.addView(button("选择 TXT / CSV 文件") {
-            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type = "*/*"
+        if (!isOfficialMode) {
+            root.addView(label("四、IP 来源", 18f))
+            root.addView(label("本地文件导入", 15f))
+            val localImportRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            localImportRow.addView(button("选择 TXT / CSV 文件") {
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "*/*"
+                }
+                startActivityForResult(intent, 701)
+            }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
+            localImportRow.addView(button("剪切板导入IP") {
+                importIPsFromClipboard()
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+            root.addView(localImportRow)
+            sourceStats = label("已保存唯一 IPv4：${importedIPs.size}", 14f)
+            root.addView(sourceStats)
+            root.addView(button("清除已导入的本地 IP") {
+                importedIPs = emptyList()
+                geoRowsByIP = emptyMap()
+                countryCodesByIP = emptyMap()
+                prefs.edit().putString("imported_ips", "").commit()
+                saveGeoMetadata()
+                sourceStats.text = "已保存唯一 IPv4：0"
+                Toast.makeText(this, "已清除本地 IP", Toast.LENGTH_SHORT).show()
+            })
+            localCheck = CheckBox(this).apply {
+                text = "启用本地文件 IP"
+                isChecked = prefs.getBoolean("localEnabled", false)
             }
-            startActivityForResult(intent, 701)
-        }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
-        localImportRow.addView(button("剪切板导入IP") {
-            importIPsFromClipboard()
-        }, LinearLayout.LayoutParams(0, -2, 1f))
-        root.addView(localImportRow)
-        sourceStats = label("已保存唯一 IPv4：${importedIPs.size}", 14f)
-        root.addView(sourceStats)
-        root.addView(button("清除已导入的本地 IP") {
-            importedIPs = emptyList()
-            geoRowsByIP = emptyMap()
-            countryCodesByIP = emptyMap()
-            prefs.edit().putString("imported_ips", "").commit()
-            saveGeoMetadata()
-            sourceStats.text = "已保存唯一 IPv4：0"
-            Toast.makeText(this, "已清除本地 IP", Toast.LENGTH_SHORT).show()
-        })
-        localCheck = CheckBox(this).apply {
-            text = "启用本地文件 IP"
-            isChecked = prefs.getBoolean("localEnabled", false)
+            networkCheck = CheckBox(this).apply {
+                text = "启用网络 URL 来源"
+                isChecked = prefs.getBoolean("networkEnabled", true)
+            }
+            root.addView(localCheck)
+            root.addView(networkCheck)
+            root.addView(label("网络 URL（每行一个，编辑后自动保存）", 14f))
+            urlsInput = edit("每行一个 HTTPS URL", prefs.getString("urls", defaults.joinToString("\\n"))!!, false)
+            root.addView(urlsInput, LinearLayout.LayoutParams(-1, dp(140)))
+            urlsInput.addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { saveSourceSettings() }
+                override fun afterTextChanged(s: android.text.Editable?) {}
+            })
+            localCheck.setOnCheckedChangeListener { _, _ -> saveSourceSettings() }
+            networkCheck.setOnCheckedChangeListener { _, _ -> saveSourceSettings() }
         }
-        networkCheck = CheckBox(this).apply {
-            text = "启用网络 URL 来源"
-            isChecked = prefs.getBoolean("networkEnabled", true)
-        }
-        root.addView(localCheck)
-        root.addView(networkCheck)
-        root.addView(label("网络 URL（每行一个，编辑后自动保存）", 14f))
-        urlsInput = edit("每行一个 HTTPS URL", prefs.getString("urls", defaults.joinToString("\\n"))!!, false)
-        root.addView(urlsInput, LinearLayout.LayoutParams(-1, dp(140)))
-        urlsInput.addTextChangedListener(object : android.text.TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { saveSourceSettings() }
-            override fun afterTextChanged(s: android.text.Editable?) {}
-        })
-        localCheck.setOnCheckedChangeListener { _, _ -> saveSourceSettings() }
-        networkCheck.setOnCheckedChangeListener { _, _ -> saveSourceSettings() }
 
 
-        root.addView(label("五、GitHub 上传", 18f))
+
+
+        root.addView(label(if (isOfficialMode) "四、GitHub 上传" else "五、GitHub 上传", 18f))
         root.addView(button("账号与仓库设置") { showGitHubSettings() })
         root.addView(label("上传方式", 15f))
         githubModeGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
