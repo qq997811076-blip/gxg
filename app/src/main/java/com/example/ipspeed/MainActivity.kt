@@ -710,7 +710,7 @@ open class MainActivity : Activity() {
                 isFillViewport = false
                 overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
             }
-            qualifiedScroll.addView(dataCenterRowsContainer, ScrollView.LayoutParams(-1, -2))
+            qualifiedScroll.addView(dataCenterRowsContainer, android.view.ViewGroup.LayoutParams(-1, -2))
             qualifiedFrame.addView(qualifiedScroll, LinearLayout.LayoutParams(-1, dp(240)))
             root.addView(qualifiedFrame, LinearLayout.LayoutParams(-1, -2))
         }
