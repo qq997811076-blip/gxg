@@ -593,10 +593,13 @@ func main() {
 	topN, e3 := strconv.Atoi(os.Args[4])
 
 	connectivityOnly := false
+	speedOnly := false
 	for _, arg := range os.Args[5:] {
-		if arg == "--connectivity-only" {
+		switch arg {
+		case "--connectivity-only":
 			connectivityOnly = true
-			break
+		case "--speed-only":
+			speedOnly = true
 		}
 	}
 
@@ -623,7 +626,7 @@ func main() {
 			}
 		}
 		for _, arg := range os.Args[sourceArgStart:] {
-			if arg != "--connectivity-only" {
+			if arg != "--connectivity-only" && arg != "--speed-only" {
 				customSourceURLs = append(customSourceURLs, arg)
 			}
 		}
@@ -663,11 +666,44 @@ func main() {
 	fmt.Println("最低有效下载量：64 KiB")
 	fmt.Println("最低打印速度：0.5M")
 
-	// 第一阶段：检测所有 IP 的 HTTPS 连通性和延迟。
-	connected := runStage(
-		"第一阶段：HTTPS 连通性检测与延迟测量",
-		ips, connectN, target,
-	)
+	// 普通/首轮模式执行连通性检测；手动数据中心测速模式直接复用首轮记录，不重新检测。
+	var connected []Result
+	if speedOnly {
+		data, readErr := os.ReadFile("official_connected.tsv")
+		if readErr != nil {
+			fmt.Printf("读取首轮连通性记录失败，停止测速：%v\n", readErr)
+			os.Exit(1)
+		}
+		metadata := make(map[string]Result)
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Split(line, "\t")
+			if len(fields) < 7 || fields[0] == "" {
+				continue
+			}
+			latencyMs, _ := strconv.ParseInt(fields[4], 10, 64)
+			metadata[fields[0]] = Result{
+				IP: fields[0], DataCenter: fields[1], CountryCode: fields[2],
+				SourceLocation: fields[3], LatencyMs: latencyMs,
+				Latency: time.Duration(latencyMs) * time.Millisecond,
+				Region: fields[5], City: fields[6],
+			}
+		}
+		for _, ip := range ips {
+			r, ok := metadata[ip]
+			if !ok {
+				fmt.Printf("IP %s 不在首轮合格记录中，停止以避免测速未通过连通性检测的 IP。\n", ip)
+				os.Exit(1)
+			}
+			connected = append(connected, r)
+		}
+		fmt.Printf("手动测速模式：直接复用首轮连通性检测通过的 %d 个 IP，不重新随机抽取或检测连通性。\n", len(connected))
+	} else {
+		// 第一阶段：检测所有 IP 的 HTTPS 连通性和延迟。
+		connected = runStage(
+			"第一阶段：HTTPS 连通性检测与延迟测量",
+			ips, connectN, target,
+		)
+	}
 
 	fmt.Printf("\nHTTPS 连通：%d 个 | 不通：%d 个\n",
 		len(connected), len(ips)-len(connected))
