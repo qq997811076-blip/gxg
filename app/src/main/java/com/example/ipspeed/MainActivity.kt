@@ -1316,6 +1316,103 @@ open class MainActivity : Activity() {
         return unique.toList() to duplicates
     }
 
+
+    private data class IPv4Range(val start: Long, val end: Long)
+
+    private fun ipv4ToLong(value: String): Long {
+        val parts = value.split(".")
+        if (parts.size != 4) throw IOException("无效 IPv4 地址：$value")
+        var result = 0L
+        for (part in parts) {
+            val octet = part.toIntOrNull()
+            if (octet == null || octet !in 0..255) throw IOException("无效 IPv4 地址：$value")
+            result = (result shl 8) or octet.toLong()
+        }
+        return result
+    }
+
+    private fun ipv4FromLong(value: Long): String =
+        "${(value ushr 24) and 255}.${(value ushr 16) and 255}.${(value ushr 8) and 255}.${value and 255}"
+
+    private fun parseOfficialCIDRs(content: String): List<IPv4Range> {
+        val ranges = mutableListOf<IPv4Range>()
+        for (rawLine in content.lineSequence()) {
+            val line = rawLine.trim()
+            if (line.isEmpty()) continue
+            val parts = line.split("/")
+            if (parts.size != 2) throw IOException("Cloudflare 网段格式无效：$line")
+            val prefix = parts[1].toIntOrNull()
+                ?: throw IOException("Cloudflare 网段掩码无效：$line")
+            if (prefix !in 0..32) throw IOException("Cloudflare 网段掩码超出范围：$line")
+            val address = ipv4ToLong(parts[0])
+            val mask = if (prefix == 0) 0L else (0xFFFFFFFFL shl (32 - prefix)) and 0xFFFFFFFFL
+            val start = address and mask
+            val size = 1L shl (32 - prefix)
+            ranges.add(IPv4Range(start, start + size - 1L))
+        }
+        if (ranges.isEmpty()) throw IOException("Cloudflare 官方 IPv4 网段列表为空")
+        // 合并重叠或相邻网段，确保抽样是对整个地址集合均匀随机。
+        val sorted = ranges.sortedBy { it.start }
+        val merged = mutableListOf<IPv4Range>()
+        for (range in sorted) {
+            val last = merged.lastOrNull()
+            if (last != null && range.start <= last.end + 1L) {
+                merged[merged.lastIndex] = IPv4Range(last.start, maxOf(last.end, range.end))
+            } else {
+                merged.add(range)
+            }
+        }
+        return merged
+    }
+
+    private fun loadOfficialRandomIPs(): List<String> {
+        val cidrFile = File(filesDir, "official_cf_ipv4_cidrs.txt")
+        val cidrContent = if (cidrFile.exists()) {
+            cidrFile.readText(Charsets.UTF_8)
+        } else {
+            var connection: HttpURLConnection? = null
+            val downloaded = try {
+                connection = (URL("https://www.cloudflare.com/ips-v4").openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 15000
+                    readTimeout = 60000
+                    instanceFollowRedirects = true
+                    setRequestProperty("User-Agent", "Mozilla/5.0")
+                }
+                val code = connection.responseCode
+                if (code !in 200..299) throw IOException("下载 Cloudflare 官方网段失败，HTTP 状态码：$code")
+                connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            } finally {
+                connection?.disconnect()
+            }
+            // 先校验下载内容，确认有效后才保存到本地文件。
+            parseOfficialCIDRs(downloaded)
+            cidrFile.writeText(downloaded, Charsets.UTF_8)
+            downloaded
+        }
+        val ranges = parseOfficialCIDRs(cidrContent)
+        val total = ranges.sumOf { it.end - it.start + 1L }
+        val count = 6534
+        if (total < count.toLong()) throw IOException("Cloudflare 官方 IPv4 网段总地址数不足 $count 个")
+        val randomOffsets = HashSet<Long>(count * 2)
+        while (randomOffsets.size < count) {
+            randomOffsets.add(kotlin.random.Random.Default.nextLong(total))
+        }
+        val offsets = randomOffsets.toList()
+        return offsets.map { offset ->
+            var remaining = offset
+            var address = 0L
+            for (range in ranges) {
+                val rangeSize = range.end - range.start + 1L
+                if (remaining < rangeSize) {
+                    address = range.start + remaining
+                    break
+                }
+                remaining -= rangeSize
+            }
+            ipv4FromLong(address)
+        }
+    }
+
     private fun startTest() {
         if (!savedDataLoaded) {
             Toast.makeText(this, "本地 IP 数据仍在加载，请稍候", Toast.LENGTH_SHORT).show()
@@ -1363,7 +1460,7 @@ open class MainActivity : Activity() {
 
         val localEnabled = prefs.getBoolean("localEnabled", true)
         val networkEnabled = prefs.getBoolean("networkEnabled", true)
-        val clipboardText = if (localEnabled) {
+        val clipboardText = if (!isOfficialMode && localEnabled) {
             try {
                 val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 val clip = clipboard.primaryClip
@@ -1374,11 +1471,11 @@ open class MainActivity : Activity() {
         } else ""
         val urls = prefs.getString("urls", defaults.joinToString("\n"))!!
             .lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
-        if (!localEnabled && !networkEnabled) {
+        if (!isOfficialMode && !localEnabled && !networkEnabled) {
             Toast.makeText(this, "请至少启用一个 IP 来源", Toast.LENGTH_LONG).show()
             return
         }
-        if (localEnabled && importedIPs.isEmpty() && !networkEnabled) {
+        if (!isOfficialMode && localEnabled && importedIPs.isEmpty() && !networkEnabled) {
             Toast.makeText(this, "本地来源已启用，但还没有导入 IP 文件；请启用网络来源或导入文件", Toast.LENGTH_LONG).show()
             return
         }
@@ -1410,56 +1507,64 @@ open class MainActivity : Activity() {
             val runGeoRows = linkedMapOf<String, String>()
             val runCountryCodes = linkedMapOf<String, String>()
             try {
-                // 再次规范化本地保存内容，防止旧版本保存的重复/非规范 IP 混入测速。
                 val mergedIPs = linkedSetOf<String>()
-                if (localEnabled) {
-                    val clipboardParsed = if (clipboardText.isNotBlank()) parseImported(clipboardText, false).first else emptyList()
-                    val localUnique = linkedSetOf<String>().apply {
-                        addAll(parseImported(importedIPs.joinToString("\n"), false).first)
-                        addAll(clipboardParsed)
-                    }.toList()
-                    mergedIPs.addAll(localUnique)
-                    for (ip in localUnique) {
-                        savedGeoRows[ip]?.let { runGeoRows[ip] = it }
-                        savedCountryCodes[ip]?.let { runCountryCodes[ip] = it }
-                    }
-                    sourceLog.append("本地来源：原保存 ${importedIPs.size} 条；重新去重后加入 ${localUnique.size} 个唯一 IPv4\n")
+                if (isOfficialMode) {
+                    sourceLog.append("官方优选：读取 Cloudflare 官方 IPv4 网段文件\\n")
+                    val officialIPs = loadOfficialRandomIPs()
+                    mergedIPs.addAll(officialIPs)
+                    sourceLog.append("从官方网段整体均匀随机抽取：${officialIPs.size} 个不重复 IPv4\\n")
                 } else {
-                    sourceLog.append("本地来源：未启用\n")
-                }
-
-                if (networkEnabled) {
-                    for (sourceURL in urls) {
-                        sourceLog.append("正在读取：${sourceURL}\n")
-                        runOnUiThread {
-                            status.text = "状态：正在读取 IP 来源"
-                            resultsView.text = sourceLog.toString()
+                    if (localEnabled) {
+                        val clipboardParsed = if (clipboardText.isNotBlank()) parseImported(clipboardText, false).first else emptyList()
+                        val localUnique = linkedSetOf<String>().apply {
+                            addAll(parseImported(importedIPs.joinToString("\n"), false).first)
+                            addAll(clipboardParsed)
+                        }.toList()
+                        mergedIPs.addAll(localUnique)
+                        for (ip in localUnique) {
+                            savedGeoRows[ip]?.let { runGeoRows[ip] = it }
+                            savedCountryCodes[ip]?.let { runCountryCodes[ip] = it }
                         }
-                        var connection: HttpURLConnection? = null
-                        try {
-                            connection = (URL(sourceURL).openConnection() as HttpURLConnection).apply {
-                                connectTimeout = 15000
-                                readTimeout = 60000
-                                instanceFollowRedirects = true
-                                setRequestProperty("User-Agent", "Mozilla/5.0")
+                        sourceLog.append("本地来源：原保存 ${importedIPs.size} 条；重新去重后加入 ${localUnique.size} 个唯一 IPv4\n")
+                    } else {
+                        sourceLog.append("本地来源：未启用\n")
+                    }
+    
+                    if (networkEnabled) {
+                        for (sourceURL in urls) {
+                            sourceLog.append("正在读取：${sourceURL}\n")
+                            runOnUiThread {
+                                status.text = "状态：正在读取 IP 来源"
+                                resultsView.text = sourceLog.toString()
                             }
-                            val code = connection.responseCode
-                            if (code !in 200..299) throw java.io.IOException("HTTP 状态码：$code")
-                            val content = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                            val found = parseImported(content, false).first
-                            val geo = parseGeoMetadata(content, false)
-                            mergeGeoMetadata(runGeoRows, runCountryCodes, geo)
-                            val before = mergedIPs.size
-                            mergedIPs.addAll(found)
-                            sourceLog.append("该来源识别到 ${found.size} 个唯一 IPv4；新增 ${mergedIPs.size - before} 个\n")
-                        } catch (e: Exception) {
-                            sourceLog.append("读取失败，跳过此来源：${e.message ?: e.javaClass.simpleName}\n")
-                        } finally {
-                            connection?.disconnect()
+                            var connection: HttpURLConnection? = null
+                            try {
+                                connection = (URL(sourceURL).openConnection() as HttpURLConnection).apply {
+                                    connectTimeout = 15000
+                                    readTimeout = 60000
+                                    instanceFollowRedirects = true
+                                    setRequestProperty("User-Agent", "Mozilla/5.0")
+                                }
+                                val code = connection.responseCode
+                                if (code !in 200..299) throw java.io.IOException("HTTP 状态码：$code")
+                                val content = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                                val found = parseImported(content, false).first
+                                val geo = parseGeoMetadata(content, false)
+                                mergeGeoMetadata(runGeoRows, runCountryCodes, geo)
+                                val before = mergedIPs.size
+                                mergedIPs.addAll(found)
+                                sourceLog.append("该来源识别到 ${found.size} 个唯一 IPv4；新增 ${mergedIPs.size - before} 个\n")
+                            } catch (e: Exception) {
+                                sourceLog.append("读取失败，跳过此来源：${e.message ?: e.javaClass.simpleName}\n")
+                            } finally {
+                                connection?.disconnect()
+                            }
                         }
+                    } else {
+                        sourceLog.append("网络来源：未启用\n")
                     }
-                } else {
-                    sourceLog.append("网络来源：未启用\n")
+    
+    
                 }
 
                 if (mergedIPs.isEmpty()) {
