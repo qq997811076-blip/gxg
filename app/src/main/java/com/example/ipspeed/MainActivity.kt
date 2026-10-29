@@ -106,6 +106,7 @@ open class MainActivity : Activity() {
     private lateinit var resultsView: TextView
     private lateinit var dataCenterSummaryView: TextView
     private lateinit var dataCenterRowsContainer: LinearLayout
+    private var officialDataCenterScroll: ScrollView? = null
     private var officialQualifiedByDataCenter: Map<String, List<OfficialCandidate>> = emptyMap()
     private lateinit var targetInput: EditText
     private lateinit var targetPresetSpinner: Spinner
@@ -691,29 +692,39 @@ open class MainActivity : Activity() {
         status = label("状态：待开始", 14f)
         status.setPadding(0, dp(2), 0, dp(8))
         root.addView(status)
-        root.addView(label(if (isOfficialMode) "合格结果（按数据中心分类）" else "合格结果（按速度从高到低）", 16f))
+        val qualifiedHeaderRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        qualifiedHeaderRow.addView(
+            label(if (isOfficialMode) "合格结果（按数据中心分类）" else "合格结果（按速度从高到低）", 16f),
+            LinearLayout.LayoutParams(0, -2, 1f)
+        )
+        if (isOfficialMode) {
+            qualifiedHeaderRow.addView(button("返回数据中心") {
+                showOfficialDataCenterList()
+            }, LinearLayout.LayoutParams(-2, -2))
+        }
+        root.addView(qualifiedHeaderRow)
+
         resultsView = label("暂无结果")
         resultsView.textSize = 14f
-        resultsView.setPadding(dp(12), dp(12), dp(12), dp(12))
-        resultsView.setBackgroundColor(0xFFF1F3F4.toInt())
-        root.addView(resultsView, LinearLayout.LayoutParams(-1, dp(320)))
+        resultsView.setPadding(dp(2), dp(2), dp(2), dp(2))
+        val resultsFrame = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            setBackgroundColor(0xFFF1F3F4.toInt())
+        }
+        resultsFrame.addView(resultsView, LinearLayout.LayoutParams(-1, 0, 1f))
         if (isOfficialMode) {
             dataCenterRowsContainer = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(8), dp(4), dp(8), dp(4))
-            }
-            val qualifiedFrame = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
                 setPadding(dp(2), dp(2), dp(2), dp(2))
-                background = GradientDrawable().apply {
-                    setColor(Color.TRANSPARENT)
-                    setStroke(dp(1), 0xFF9AA4B2.toInt())
-                    cornerRadius = dp(8).toFloat()
-                }
             }
-            val qualifiedScroll = ScrollView(this).apply {
+            officialDataCenterScroll = ScrollView(this).apply {
                 isFillViewport = false
                 overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+                visibility = View.GONE
                 setOnTouchListener { view, event ->
                     when (event.actionMasked) {
                         android.view.MotionEvent.ACTION_DOWN,
@@ -724,10 +735,10 @@ open class MainActivity : Activity() {
                     false
                 }
             }
-            qualifiedScroll.addView(dataCenterRowsContainer, android.view.ViewGroup.LayoutParams(-1, -2))
-            qualifiedFrame.addView(qualifiedScroll, LinearLayout.LayoutParams(-1, dp(240)))
-            root.addView(qualifiedFrame, LinearLayout.LayoutParams(-1, -2))
+            officialDataCenterScroll?.addView(dataCenterRowsContainer, android.view.ViewGroup.LayoutParams(-1, -2))
+            resultsFrame.addView(officialDataCenterScroll, LinearLayout.LayoutParams(-1, 0, 1f))
         }
+        root.addView(resultsFrame, LinearLayout.LayoutParams(-1, dp(320)))
         root.addView(label("数据中心汇总", 16f))
         dataCenterSummaryView = label("暂无数据中心统计", 13f)
         dataCenterSummaryView.setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -1522,6 +1533,8 @@ open class MainActivity : Activity() {
             return
         }
 
+        if (isOfficialMode) showOfficialSpeedResults()
+
         prefs.edit()
             .putString("target", configuredTarget)
             .putString("targetPreset", currentTargetPreset())
@@ -1739,6 +1752,7 @@ open class MainActivity : Activity() {
                     runOnUiThread {
                         process = null
                         if (exitCode != 0) {
+                            showOfficialSpeedResults()
                             resultsView.text = ""
                             status.text = "状态：连通性测试异常退出（代码 $exitCode）"
                         } else {
@@ -1748,8 +1762,8 @@ open class MainActivity : Activity() {
                                 .mapValues { (_, rows) ->
                                     rows.sortedWith(compareBy<OfficialCandidate> { it.latencyMs }.thenBy { it.ip })
                                 }
-                            resultsView.text = ""
                             renderOfficialDataCenterRows()
+                            showOfficialDataCenterList()
                             val qualifiedCount = candidates.size
                             status.text = "状态：连通性测试完成；合格 IP $qualifiedCount 个；未自动测速"
                             dataCenterSummaryView.text = "连通性测试完成：${officialQualifiedByDataCenter.size} 个数据中心，$qualifiedCount 个合格 IP。点击对应数据中心的“开始测速”进行单独测速。"
@@ -1893,12 +1907,26 @@ open class MainActivity : Activity() {
         }
     }
 
+    private fun showOfficialDataCenterList() {
+        if (!isOfficialMode) return
+        val scroll = officialDataCenterScroll ?: return
+        resultsView.visibility = View.GONE
+        scroll.visibility = View.VISIBLE
+    }
+
+    private fun showOfficialSpeedResults() {
+        if (!isOfficialMode) return
+        resultsView.visibility = View.VISIBLE
+        officialDataCenterScroll?.visibility = View.GONE
+    }
+
     private fun startOfficialDataCenterSpeedTest(colo: String) {
         val candidates = officialQualifiedByDataCenter[colo].orEmpty()
         if (candidates.isEmpty()) {
             Toast.makeText(this, "该数据中心没有合格 IP", Toast.LENGTH_SHORT).show()
             return
         }
+        showOfficialSpeedResults()
         startTest(connectivityOnly = false, selectedIPs = candidates.map { it.ip })
     }
 
