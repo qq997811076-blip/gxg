@@ -679,11 +679,11 @@ func main() {
 			if country == "" { country = "XX" }
 			location := r.SourceLocation
 			if location == "" { location = "XX" }
-			fmt.Printf("CONNECT|%s|%s|%s|%s|%.2f|%s|%s\\n",
+			fmt.Printf("CONNECT|%s|%s|%s|%s|%.2f|%s|%s\n",
 				r.IP, colo, country, location,
 				float64(r.Latency)/float64(time.Millisecond), r.Region, r.City)
 		}
-		fmt.Printf("\\n连通性测试完成：%d 个合格 IP；未执行下载测速。\\n", len(connected))
+		fmt.Printf("\n连通性测试完成：%d 个合格 IP；未执行下载测速。\n", len(connected))
 		return
 	}
 
