@@ -10,6 +10,11 @@ import android.os.Bundle
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.text.InputType
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.TextPaint
+import android.text.method.LinkMovementMethod
+import android.text.style.ClickableSpan
 import android.util.Base64
 import android.view.Gravity
 import android.view.View
@@ -1767,7 +1772,11 @@ open class MainActivity : Activity() {
                     val speed = baseLine.substringAfter("#").removeSuffix("M")
                     val colo = fields.getOrNull(1).orEmpty().ifBlank { "UNK" }
                     val sourceLocation = fields.getOrNull(3).orEmpty().ifBlank { "XX" }
-                    "$ip:443#$colo-$sourceLocation-${speed}MB/s"
+                    if (isOfficialMode) {
+                        "$ip:443#官方优选-${speed}MB/s"
+                    } else {
+                        "$ip:443#$colo-$sourceLocation-${speed}MB/s"
+                    }
                 }
                 val dcStats = parsedRaw.map { raw ->
                     val fields = raw.split("|")
@@ -1804,7 +1813,13 @@ open class MainActivity : Activity() {
                             "状态：测速程序异常退出（代码 $exitCode），详细日志见下方"
                         }
                     } else {
-                        resultsView.text = if (visible.isEmpty()) "没有达到显示标准的结果" else visible.joinToString("\n")
+                        if (visible.isEmpty()) {
+                            resultsView.text = "没有达到显示标准的结果"
+                        } else if (isOfficialMode) {
+                            renderOfficialSpeedResults(visible)
+                        } else {
+                            resultsView.text = visible.joinToString("\n")
+                        }
                         val snapshot = visible.joinToString("\n")
                         val saved = try { prefs.edit().putString("last_completed_result", snapshot).commit() } catch (_: Exception) { false }
                         if (!saved) Toast.makeText(this, "最近一次测速结果保存失败", Toast.LENGTH_LONG).show()
@@ -1831,7 +1846,13 @@ open class MainActivity : Activity() {
             dataCenterRowsContainer.addView(label("暂无合格数据中心", 13f))
             return
         }
-        officialQualifiedByDataCenter.forEach { (colo, candidates) ->
+        officialQualifiedByDataCenter.toList()
+            .sortedWith(
+                compareBy<Pair<String, List<OfficialCandidate>>> {
+                    it.second.minOfOrNull { candidate -> candidate.latencyMs } ?: Double.MAX_VALUE
+                }.thenBy { it.first }
+            )
+            .forEach { (colo, candidates) ->
             val first = candidates.firstOrNull()
             val country = first?.country ?: "XX"
             val minLatency = candidates.minOfOrNull { it.latencyMs } ?: Double.MAX_VALUE
@@ -1882,9 +1903,39 @@ open class MainActivity : Activity() {
     }
 
     private fun resultSpeed(line: String): Double {
+        val officialFormatted = Regex("#官方优选-([0-9]+(?:\\.[0-9]+)?)MB/s$").find(line)
+        if (officialFormatted != null) return officialFormatted.groupValues[1].toDoubleOrNull() ?: 0.0
         val formatted = Regex("#[A-Z]{3}-[A-Z]{2}-([0-9]+(?:\\.[0-9]+)?)MB/s$").find(line)
         if (formatted != null) return formatted.groupValues[1].toDoubleOrNull() ?: 0.0
         return line.substringAfter("#").substringBefore("M").toDoubleOrNull() ?: 0.0
+    }
+
+    private fun renderOfficialSpeedResults(lines: List<String>) {
+        val content = SpannableStringBuilder()
+        lines.forEachIndexed { index, line ->
+            val ip = line.substringBefore(":443#")
+            val lineStart = content.length
+            content.append(line)
+            val ipEnd = lineStart + ip.length
+            if (ip.isNotBlank() && ipEnd <= content.length) {
+                content.setSpan(object : ClickableSpan() {
+                    override fun onClick(widget: View) {
+                        val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("IP", ip))
+                        Toast.makeText(this@MainActivity, "已复制 IP：$ip", Toast.LENGTH_SHORT).show()
+                    }
+
+                    override fun updateDrawState(ds: TextPaint) {
+                        ds.color = Color.rgb(33, 150, 243)
+                        ds.isUnderlineText = true
+                    }
+                }, lineStart, ipEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            if (index < lines.lastIndex) content.append("\n")
+        }
+        resultsView.text = content
+        resultsView.movementMethod = LinkMovementMethod.getInstance()
+        resultsView.highlightColor = Color.TRANSPARENT
     }
 
     private fun filterResults(lines: List<String>, threshold: Double): List<String> =
