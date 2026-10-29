@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - official-qualified-scroll-speed-20261030
+      - isp-auto-target-20261030
       - add-official-independent-ui-20261029
       - official-cf-ip-random-65534-20261029
       - ui-two-mode-switch-20261029

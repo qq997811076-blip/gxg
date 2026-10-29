@@ -163,7 +163,7 @@ open class MainActivity : Activity() {
     }
 
     private val targetPresetLabels = arrayOf("自动选择", "Cloudflare", "CM提供", "移动专属", "手动输入")
-    private val autoTargetLabel = "自动选择"
+    private val autoTargetLabel = "根据运营商选择"
     private val defaultTargetUrl = "https://speed.cloudflare.com/__down?bytes=50000000"
     private val cloudflareTargetUrl = "https://speed.cloudflare.com/__down?bytes=99999999"
     private val cmTargetUrl = "https://cf.090227.xyz/__down?bytes=99999999"
@@ -600,8 +600,82 @@ open class MainActivity : Activity() {
 
     private fun resolveTargetUrlForCore(): String {
         return when (currentTargetPreset()) {
-            "auto" -> defaultTargetUrl
+            "auto" -> autoTargetLabel
             else -> targetInput.text.toString().trim()
+        }
+    }
+
+    private fun normalizeISPName(value: String): String? = when {
+        value.contains("移动") -> "中国移动"
+        value.contains("联通") -> "中国联通"
+        value.contains("电信") -> "中国电信"
+        else -> null
+    }
+
+    private fun findISPInJson(value: Any?): String? {
+        when (value) {
+            is org.json.JSONObject -> {
+                val keys = value.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    if (key.equals("isp", ignoreCase = true) || key.contains("operator", ignoreCase = true)) {
+                        val raw = value.opt(key)
+                        if (raw is String) normalizeISPName(raw)?.let { return it }
+                    }
+                }
+                val nestedKeys = value.keys()
+                while (nestedKeys.hasNext()) {
+                    findISPInJson(value.opt(nestedKeys.next()))?.let { return it }
+                }
+            }
+            is org.json.JSONArray -> {
+                for (index in 0 until value.length()) {
+                    findISPInJson(value.opt(index))?.let { return it }
+                }
+            }
+            is String -> return normalizeISPName(value)
+        }
+        return null
+    }
+
+    private fun queryCurrentISPOnce(): String {
+        var connection: HttpURLConnection? = null
+        try {
+            connection = (URL("https://ip9.com.cn/get").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 15000
+                readTimeout = 15000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "Mozilla/5.0")
+            }
+            activeSourceConnection = connection
+            val code = connection.responseCode
+            if (code != HttpURLConnection.HTTP_OK) {
+                throw IOException("运营商查询请求失败：HTTP $code")
+            }
+            val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val fromJson = try {
+                findISPInJson(org.json.JSONTokener(body).nextValue())
+            } catch (_: Exception) {
+                null
+            }
+            fromJson?.let { return it }
+
+            val patterns = listOf(
+                Regex("中国移动|移动通信") to "中国移动",
+                Regex("中国联通|联通网络") to "中国联通",
+                Regex("中国电信|电信网络") to "中国电信"
+            )
+            for ((pattern, name) in patterns) {
+                if (pattern.containsMatchIn(body)) return name
+            }
+            throw IOException("未查询到运营商名称，无法识别当前运营商")
+        } catch (e: Exception) {
+            if (e is IOException && e.message?.contains("运营商") == true) throw e
+            throw IOException("运营商查询失败：${e.message ?: e.javaClass.simpleName}", e)
+        } finally {
+            connection?.disconnect()
+            if (activeSourceConnection === connection) activeSourceConnection = null
         }
     }
 
@@ -1659,7 +1733,9 @@ open class MainActivity : Activity() {
             Toast.makeText(this, "测速正在运行", Toast.LENGTH_SHORT).show()
             return
         }
-        val configuredTarget = resolveTargetUrlForCore()
+        val autoTargetSelected = currentTargetPreset() == "auto"
+        val requiresISP = autoTargetSelected && !connectivityOnly
+        val configuredTarget = if (autoTargetSelected) autoTargetLabel else targetInput.text.toString().trim()
         val capEnabled = downloadCapEnabledCheck.isChecked
         val capMiB = downloadCapInput.text.toString().trim().toDoubleOrNull()
         if (capEnabled && (capMiB == null || capMiB <= 0.0 || capMiB > 1_000_000.0)) {
@@ -1671,13 +1747,12 @@ open class MainActivity : Activity() {
         } else {
             50L * 1024L * 1024L
         }
-        // 仅为本次测速生成带下载上限的 URL，不改写已保存的原始地址。
-        val target = if (capEnabled) replaceTargetBytesParameter(configuredTarget, downloadCapBytes) else configuredTarget
         val connectN = connectInput.text.toString().trim().toIntOrNull()
         val downloadN = downloadInput.text.toString().trim().toIntOrNull()
         val topN = topNInput.text.toString().trim().toIntOrNull()
         val threshold = thresholdInput.text.toString().trim().toDoubleOrNull()
-        if (!target.startsWith("https://") || connectN == null || connectN <= 0 ||
+        if ((!autoTargetSelected && !configuredTarget.startsWith("https://")) ||
+            connectN == null || connectN <= 0 ||
             downloadN == null || downloadN <= 0 || topN == null || topN <= 0 ||
             threshold == null || threshold < 0.1) {
             Toast.makeText(this, "请检查参数；最低显示速度不能低于 0.1 MiB/s", Toast.LENGTH_LONG).show()
@@ -1742,11 +1817,6 @@ open class MainActivity : Activity() {
         // 按指定数据中心测速时，所有合格 IP 都参与；普通模式仍使用原来的低延迟数量参数。
         val effectiveTopN = topN
         // Android 原生网络栈读取 IP 来源，避免 Go 纯 Go DNS 解析器误用 ::1:53。
-        val args = mutableListOf(
-            binary.absolutePath, target, connectN.toString(), downloadN.toString(), effectiveTopN.toString(), "no", downloadCapBytes.toString()
-        )
-        if (connectivityOnly) args.add("connect-only")
-        if (selectedIPs != null) args.add("speed-only")
         resultLines = emptyList()
         resultsView.textSize = 14f
         resultsView.text = "正在准备测速…"
@@ -1759,6 +1829,30 @@ open class MainActivity : Activity() {
             val runGeoRows = linkedMapOf<String, String>()
             val runCountryCodes = linkedMapOf<String, String>()
             try {
+                val resolvedTarget = if (requiresISP) {
+                    runOnUiThread {
+                        if (generation == testGeneration) {
+                            status.text = "状态：正在查询运营商"
+                            resultsView.text = "正在查询当前网络运营商…"
+                        }
+                    }
+                    val isp = queryCurrentISPOnce()
+                    val selectedTarget = if (isp == "中国移动") mobileTargetUrl else cloudflareTargetUrl
+                    sourceLog.append("运营商识别：$isp；本次测速地址：$selectedTarget\n")
+                    selectedTarget
+                } else if (autoTargetSelected) {
+                    defaultTargetUrl
+                } else {
+                    configuredTarget
+                }
+                // 每次真正开始测速只查询一次运营商；本次所有 IP 共用 resolvedTarget。
+                val target = if (capEnabled) replaceTargetBytesParameter(resolvedTarget, downloadCapBytes) else resolvedTarget
+                val args = mutableListOf(
+                    binary.absolutePath, target, connectN.toString(), downloadN.toString(), effectiveTopN.toString(), "no", downloadCapBytes.toString()
+                )
+                if (connectivityOnly) args.add("connect-only")
+                if (selectedIPs != null) args.add("speed-only")
+
                 val mergedIPs = linkedSetOf<String>()
                 if (selectedIPs != null) {
                     mergedIPs.addAll(selectedIPs.take(topN))
@@ -2026,8 +2120,9 @@ open class MainActivity : Activity() {
                 runOnUiThread {
                             if (generation != testGeneration) return@runOnUiThread
                     process = null
-                    status.text = "状态：启动失败"
-                    resultsView.text = e.toString()
+                    val detail = e.message ?: e.javaClass.simpleName
+                    status.text = if (requiresISP) "状态：运营商识别失败，已停止测速" else "状态：启动失败"
+                    resultsView.text = if (requiresISP) "运营商识别失败，无法获取运营商信息，已停止测速。\n$detail" else e.toString()
                 }
             } finally {
                 if (generation == testGeneration) {
