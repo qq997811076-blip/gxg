@@ -196,6 +196,16 @@ open class MainActivity : Activity() {
             setOnClickListener { action() }
         }
 
+    private fun tabButton(text: String, selected: Boolean, action: () -> Unit): Button =
+        button(text, action).apply {
+            backgroundTintList = android.content.res.ColorStateList.valueOf(
+                if (selected) Color.rgb(33, 150, 243) else Color.rgb(224, 224, 224)
+            )
+            setTextColor(if (selected) Color.WHITE else Color.DKGRAY)
+            minWidth = 0
+            setPadding(dp(8), paddingTop, dp(8), paddingBottom)
+        }
+
     private fun addField(title: String, input: EditText) {
         root.addView(label(title))
         root.addView(input, LinearLayout.LayoutParams(-1, -2))
@@ -631,10 +641,11 @@ open class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         titleRow.addView(label("IP 测速", 26f), LinearLayout.LayoutParams(0, -2, 1f))
-        titleRow.addView(button(if (isOfficialMode) "个性优选" else "官方优选") {
-            if (isOfficialMode) {
-                finish()
-            } else {
+        titleRow.addView(tabButton("个性优选", selected = !isOfficialMode) {
+            if (isOfficialMode) finish()
+        }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(2) })
+        titleRow.addView(tabButton("官方优选", selected = isOfficialMode) {
+            if (!isOfficialMode) {
                 startActivity(Intent(this, OfficialActivity::class.java))
             }
         }, LinearLayout.LayoutParams(-2, -2))
@@ -1642,9 +1653,13 @@ open class MainActivity : Activity() {
                     val baseLine = fields[0]
                     val ip = baseLine.substringBefore("#")
                     val speed = baseLine.substringAfter("#").removeSuffix("M")
-                    val colo = fields.getOrNull(1).orEmpty().ifBlank { "UNK" }
-                    val sourceLocation = fields.getOrNull(3).orEmpty().ifBlank { "XX" }
-                    "$ip:443#$colo-$sourceLocation-${speed}MB/s"
+                    if (isOfficialMode) {
+                        "$ip:443#官方优选-${speed}MB/s"
+                    } else {
+                        val colo = fields.getOrNull(1).orEmpty().ifBlank { "UNK" }
+                        val sourceLocation = fields.getOrNull(3).orEmpty().ifBlank { "XX" }
+                        "$ip:443#$colo-$sourceLocation-${speed}MB/s"
+                    }
                 }
                 val dcStats = parsedRaw.map { raw ->
                     val fields = raw.split("|")
