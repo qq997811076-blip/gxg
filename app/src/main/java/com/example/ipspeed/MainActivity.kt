@@ -723,7 +723,7 @@ open class MainActivity : Activity() {
             val dataCenterRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                translationX = -dp(4)
+                translationX = -dp(4).toFloat()
             }
             dataCenterRow.addView(label("数据中心", 14f).apply {
                 gravity = Gravity.CENTER_VERTICAL
@@ -2053,6 +2053,10 @@ open class MainActivity : Activity() {
         val formatted = Regex("#[A-Z]{3}-[A-Z]{2}-([0-9]+(?:\\.[0-9]+)?)MB/s$").find(line)
         if (formatted != null) return formatted.groupValues[1].toDoubleOrNull() ?: 0.0
         return line.substringAfter("#").substringBefore("M").toDoubleOrNull() ?: 0.0
+    }
+
+    private fun renderOfficialSpeedResults(lines: List<String>) {
+        renderSpeedResults(lines)
     }
 
     private fun renderSpeedResults(lines: List<String>) {
