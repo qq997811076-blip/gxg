@@ -695,9 +695,24 @@ open class MainActivity : Activity() {
         if (isOfficialMode) {
             dataCenterRowsContainer = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(0, dp(4), 0, dp(4))
+                setPadding(dp(8), dp(4), dp(8), dp(4))
             }
-            root.addView(dataCenterRowsContainer, LinearLayout.LayoutParams(-1, -2))
+            val qualifiedFrame = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(2), dp(2), dp(2), dp(2))
+                background = GradientDrawable().apply {
+                    setColor(Color.TRANSPARENT)
+                    setStroke(dp(1), 0xFF9AA4B2.toInt())
+                    cornerRadius = dp(8).toFloat()
+                }
+            }
+            val qualifiedScroll = ScrollView(this).apply {
+                isFillViewport = false
+                overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            }
+            qualifiedScroll.addView(dataCenterRowsContainer, ScrollView.LayoutParams(-1, -2))
+            qualifiedFrame.addView(qualifiedScroll, LinearLayout.LayoutParams(-1, dp(240)))
+            root.addView(qualifiedFrame, LinearLayout.LayoutParams(-1, -2))
         }
         root.addView(label("数据中心汇总", 16f))
         dataCenterSummaryView = label("暂无数据中心统计", 13f)
@@ -1540,12 +1555,13 @@ open class MainActivity : Activity() {
         }
 
         // 按指定数据中心测速时，所有合格 IP 都参与；普通模式仍使用原来的低延迟数量参数。
-        val effectiveTopN = selectedIPs?.size ?: topN
+        val effectiveTopN = topN
         // Android 原生网络栈读取 IP 来源，避免 Go 纯 Go DNS 解析器误用 ::1:53。
         val args = mutableListOf(
             binary.absolutePath, target, connectN.toString(), downloadN.toString(), effectiveTopN.toString(), "no", downloadCapBytes.toString()
         )
         if (connectivityOnly) args.add("connect-only")
+        if (selectedIPs != null) args.add("speed-only")
         resultLines = emptyList()
         resultsView.text = "正在准备测速…"
         status.text = "状态：正在启动"
@@ -1559,8 +1575,8 @@ open class MainActivity : Activity() {
             try {
                 val mergedIPs = linkedSetOf<String>()
                 if (selectedIPs != null) {
-                    mergedIPs.addAll(selectedIPs)
-                    sourceLog.append("官方优选：仅对当前数据中心的 ${mergedIPs.size} 个合格 IP 开始测速\n")
+                    mergedIPs.addAll(selectedIPs.take(topN))
+                    sourceLog.append("官方优选：使用当前数据中心已通过连通性测试的合格 IP，按低延迟 IP 数量设置选择 ${mergedIPs.size} 个进行测速；跳过重复连通性测试\n")
                 } else if (isOfficialMode) {
                     val rangesFile = File(filesDir, "cloudflare_ipv4_ranges.txt")
                     var refreshed = false
@@ -1652,6 +1668,21 @@ open class MainActivity : Activity() {
                 // 写入前最后一次规范化去重；Go 核心读取的就是这份文件。
                 val finalIPs = parseImported(mergedIPs.joinToString("\n"), false).first
                 ipFile.writeText(finalIPs.joinToString("\n") + "\n")
+                if (selectedIPs != null) {
+                    val candidatesByIP = officialQualifiedByDataCenter.values.flatten().associateBy { it.ip }
+                    val metadata = org.json.JSONObject()
+                    finalIPs.forEach { ip ->
+                        val candidate = candidatesByIP[ip] ?: return@forEach
+                        metadata.put(ip, org.json.JSONObject()
+                            .put("colo", candidate.colo)
+                            .put("country", candidate.country)
+                            .put("sourceLocation", candidate.sourceLocation)
+                            .put("latencyMs", candidate.latencyMs)
+                            .put("region", candidate.region)
+                            .put("city", candidate.city))
+                    }
+                    File(workingDir, "ip_metadata.json").writeText(metadata.toString(), Charsets.UTF_8)
+                }
                 sourceLog.append("全部来源合并去重后：${finalIPs.size} 个唯一 IPv4\n")
                 sourceLog.append("最终写入 ips.txt、交给测速核心：${finalIPs.size} 个 IP\n\n")
                 runOnUiThread {
