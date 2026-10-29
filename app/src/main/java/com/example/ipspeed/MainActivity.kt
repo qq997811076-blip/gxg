@@ -1317,84 +1317,100 @@ open class MainActivity : Activity() {
     }
 
 
-    // 官方优选专用：本地缓存 Cloudflare 官方 IPv4 CIDR，并从所有网段整体均匀抽取 6534 个不重复地址。
-    private fun loadOfficialRandomIPs(): List<String> {
-        val cidrFile = File(filesDir, "cloudflare_ipv4_cidrs.txt")
-        if (!cidrFile.exists()) {
-            var connection: HttpURLConnection? = null
-            try {
-                connection = (URL("https://www.cloudflare.com/ips-v4").openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 15000
-                    readTimeout = 30000
-                    instanceFollowRedirects = true
-                    setRequestProperty("User-Agent", "Mozilla/5.0")
-                }
-                val code = connection.responseCode
-                if (code !in 200..299) throw IOException("HTTP 状态码：$code")
-                val downloaded = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                if (downloaded.lineSequence().none { it.trim().matches(Regex("^[0-9.]+/[0-9]{1,2}$")) }) {
-                    throw IOException("Cloudflare 官方 IPv4 网段列表为空或格式无效")
-                }
-                cidrFile.writeText(downloaded.trim() + "\n", Charsets.UTF_8)
-            } finally {
-                connection?.disconnect()
-            }
-        }
+    private data class IPv4Range(val start: Long, val end: Long)
 
-        val ranges = mutableListOf<Pair<Long, Long>>()
-        for (line in cidrFile.readLines(Charsets.UTF_8)) {
-            val value = line.trim()
-            if (value.isEmpty()) continue
-            val parts = value.split("/")
-            if (parts.size != 2) continue
-            val ip = validIPv4(parts[0]) ?: continue
-            val prefix = parts[1].toIntOrNull()?.takeIf { it in 0..32 } ?: continue
-            val octets = ip.split(".").map { it.toLong() }
-            val numeric = (octets[0] shl 24) or (octets[1] shl 16) or (octets[2] shl 8) or octets[3]
+    private fun ipv4ToLong(value: String): Long {
+        val parts = value.split(".")
+        if (parts.size != 4) throw IOException("无效 IPv4 地址：$value")
+        var result = 0L
+        for (part in parts) {
+            val octet = part.toIntOrNull()
+            if (octet == null || octet !in 0..255) throw IOException("无效 IPv4 地址：$value")
+            result = (result shl 8) or octet.toLong()
+        }
+        return result
+    }
+
+    private fun ipv4FromLong(value: Long): String =
+        "${(value ushr 24) and 255}.${(value ushr 16) and 255}.${(value ushr 8) and 255}.${value and 255}"
+
+    private fun parseOfficialCIDRs(content: String): List<IPv4Range> {
+        val ranges = mutableListOf<IPv4Range>()
+        for (rawLine in content.lineSequence()) {
+            val line = rawLine.trim()
+            if (line.isEmpty()) continue
+            val parts = line.split("/")
+            if (parts.size != 2) throw IOException("Cloudflare 网段格式无效：$line")
+            val prefix = parts[1].toIntOrNull()
+                ?: throw IOException("Cloudflare 网段掩码无效：$line")
+            if (prefix !in 0..32) throw IOException("Cloudflare 网段掩码超出范围：$line")
+            val address = ipv4ToLong(parts[0])
+            val mask = if (prefix == 0) 0L else (0xFFFFFFFFL shl (32 - prefix)) and 0xFFFFFFFFL
+            val start = address and mask
             val size = 1L shl (32 - prefix)
-            val network = (numeric / size) * size
-            val first = if (prefix <= 30) network + 1 else network
-            val last = if (prefix <= 30) network + size - 2 else network + size - 1
-            if (first <= last) ranges.add(first to last)
+            ranges.add(IPv4Range(start, start + size - 1L))
         }
-        if (ranges.isEmpty()) throw IOException("本地 Cloudflare IPv4 网段文件没有有效网段")
-
-        // 合并重叠/相邻网段，避免重复地址影响整体抽样概率。
-        val sorted = ranges.sortedBy { it.first }
-        val merged = mutableListOf<Pair<Long, Long>>()
+        if (ranges.isEmpty()) throw IOException("Cloudflare 官方 IPv4 网段列表为空")
+        // 合并重叠或相邻网段，确保抽样是对整个地址集合均匀随机。
+        val sorted = ranges.sortedBy { it.start }
+        val merged = mutableListOf<IPv4Range>()
         for (range in sorted) {
-            val previous = merged.lastOrNull()
-            if (previous != null && range.first <= previous.second + 1L) {
-                merged[merged.lastIndex] = previous.first to maxOf(previous.second, range.second)
+            val last = merged.lastOrNull()
+            if (last != null && range.start <= last.end + 1L) {
+                merged[merged.lastIndex] = IPv4Range(last.start, maxOf(last.end, range.end))
             } else {
                 merged.add(range)
             }
         }
-        val counts = merged.map { it.second - it.first + 1L }
-        val total = counts.sum()
-        val wanted = 6534
-        if (total < wanted) throw IOException("官方网段可用 IPv4 数量不足 $wanted 个")
+        return merged
+    }
 
-        // Floyd 无放回抽样：从全部可用 IPv4 的统一编号空间中均匀抽取。
-        val random = java.util.concurrent.ThreadLocalRandom.current()
-        val chosen = HashSet<Long>(wanted * 2)
-        for (j in (total - wanted) until total) {
-            val candidate = random.nextLong(j + 1L)
-            if (!chosen.add(candidate)) chosen.add(j)
-        }
-        val indexes = chosen.sorted()
-        val result = ArrayList<String>(wanted)
-        var rangeIndex = 0
-        var rangeStartIndex = 0L
-        for (index in indexes) {
-            while (rangeIndex < merged.size - 1 && index >= rangeStartIndex + counts[rangeIndex]) {
-                rangeStartIndex += counts[rangeIndex]
-                rangeIndex++
+    private fun loadOfficialRandomIPs(): List<String> {
+        val cidrFile = File(filesDir, "official_cf_ipv4_cidrs.txt")
+        val cidrContent = if (cidrFile.exists()) {
+            cidrFile.readText(Charsets.UTF_8)
+        } else {
+            var connection: HttpURLConnection? = null
+            val downloaded = try {
+                connection = (URL("https://www.cloudflare.com/ips-v4").openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 15000
+                    readTimeout = 60000
+                    instanceFollowRedirects = true
+                    setRequestProperty("User-Agent", "Mozilla/5.0")
+                }
+                val code = connection.responseCode
+                if (code !in 200..299) throw IOException("下载 Cloudflare 官方网段失败，HTTP 状态码：$code")
+                connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            } finally {
+                connection?.disconnect()
             }
-            var numeric = merged[rangeIndex].first + (index - rangeStartIndex)
-            result.add("${(numeric shr 24) and 255L}.${(numeric shr 16) and 255L}.${(numeric shr 8) and 255L}.${numeric and 255L}")
+            // 先校验下载内容，确认有效后才保存到本地文件。
+            parseOfficialCIDRs(downloaded)
+            cidrFile.writeText(downloaded, Charsets.UTF_8)
+            downloaded
         }
-        return result
+        val ranges = parseOfficialCIDRs(cidrContent)
+        val total = ranges.sumOf { it.end - it.start + 1L }
+        val count = 6534
+        if (total < count.toLong()) throw IOException("Cloudflare 官方 IPv4 网段总地址数不足 $count 个")
+        val randomOffsets = HashSet<Long>(count * 2)
+        while (randomOffsets.size < count) {
+            randomOffsets.add(kotlin.random.Random.Default.nextLong(total))
+        }
+        val offsets = randomOffsets.toList()
+        return offsets.map { offset ->
+            var remaining = offset
+            var address = 0L
+            for (range in ranges) {
+                val rangeSize = range.end - range.start + 1L
+                if (remaining < rangeSize) {
+                    address = range.start + remaining
+                    break
+                }
+                remaining -= rangeSize
+            }
+            ipv4FromLong(address)
+        }
     }
 
     private fun startTest() {
@@ -1444,7 +1460,7 @@ open class MainActivity : Activity() {
 
         val localEnabled = prefs.getBoolean("localEnabled", true)
         val networkEnabled = prefs.getBoolean("networkEnabled", true)
-        val clipboardText = if (localEnabled) {
+        val clipboardText = if (!isOfficialMode && localEnabled) {
             try {
                 val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 val clip = clipboard.primaryClip
@@ -1465,8 +1481,12 @@ open class MainActivity : Activity() {
         }
 
         val binary = File(filesDir, if (isOfficialMode) "official_sss" else "sss")
-        val ipFile = File(filesDir, if (isOfficialMode) "official_ips.txt" else "ips.txt")
+        val workDir = if (isOfficialMode) File(filesDir, "official_work") else filesDir
+        val ipFile = File(workDir, "ips.txt")
         try {
+            if (isOfficialMode && !workDir.exists() && !workDir.mkdirs()) {
+                throw IOException("无法创建官方优选工作目录")
+            }
             if (!binary.exists()) assets.open("sss").use { input ->
                 FileOutputStream(binary).use { output -> input.copyTo(output) }
             }
@@ -1491,62 +1511,64 @@ open class MainActivity : Activity() {
             val runGeoRows = linkedMapOf<String, String>()
             val runCountryCodes = linkedMapOf<String, String>()
             try {
-                // 再次规范化本地保存内容，防止旧版本保存的重复/非规范 IP 混入测速。
                 val mergedIPs = linkedSetOf<String>()
                 if (isOfficialMode) {
+                    sourceLog.append("官方优选：读取 Cloudflare 官方 IPv4 网段文件\n")
                     val officialIPs = loadOfficialRandomIPs()
                     mergedIPs.addAll(officialIPs)
-                    sourceLog.append("官方优选：从 Cloudflare 官方网段随机抽取 ${officialIPs.size} 个不重复 IPv4\n")
+                    sourceLog.append("从官方网段整体均匀随机抽取：${officialIPs.size} 个不重复 IPv4\n")
                 } else {
-                if (localEnabled) {
-                    val clipboardParsed = if (clipboardText.isNotBlank()) parseImported(clipboardText, false).first else emptyList()
-                    val localUnique = linkedSetOf<String>().apply {
-                        addAll(parseImported(importedIPs.joinToString("\n"), false).first)
-                        addAll(clipboardParsed)
-                    }.toList()
-                    mergedIPs.addAll(localUnique)
-                    for (ip in localUnique) {
-                        savedGeoRows[ip]?.let { runGeoRows[ip] = it }
-                        savedCountryCodes[ip]?.let { runCountryCodes[ip] = it }
-                    }
-                    sourceLog.append("本地来源：原保存 ${importedIPs.size} 条；重新去重后加入 ${localUnique.size} 个唯一 IPv4\n")
-                } else {
-                    sourceLog.append("本地来源：未启用\n")
-                }
-
-                if (networkEnabled) {
-                    for (sourceURL in urls) {
-                        sourceLog.append("正在读取：${sourceURL}\n")
-                        runOnUiThread {
-                            status.text = "状态：正在读取 IP 来源"
-                            resultsView.text = sourceLog.toString()
+                    if (localEnabled) {
+                        val clipboardParsed = if (clipboardText.isNotBlank()) parseImported(clipboardText, false).first else emptyList()
+                        val localUnique = linkedSetOf<String>().apply {
+                            addAll(parseImported(importedIPs.joinToString("\n"), false).first)
+                            addAll(clipboardParsed)
+                        }.toList()
+                        mergedIPs.addAll(localUnique)
+                        for (ip in localUnique) {
+                            savedGeoRows[ip]?.let { runGeoRows[ip] = it }
+                            savedCountryCodes[ip]?.let { runCountryCodes[ip] = it }
                         }
-                        var connection: HttpURLConnection? = null
-                        try {
-                            connection = (URL(sourceURL).openConnection() as HttpURLConnection).apply {
-                                connectTimeout = 15000
-                                readTimeout = 60000
-                                instanceFollowRedirects = true
-                                setRequestProperty("User-Agent", "Mozilla/5.0")
+                        sourceLog.append("本地来源：原保存 ${importedIPs.size} 条；重新去重后加入 ${localUnique.size} 个唯一 IPv4\n")
+                    } else {
+                        sourceLog.append("本地来源：未启用\n")
+                    }
+    
+                    if (networkEnabled) {
+                        for (sourceURL in urls) {
+                            sourceLog.append("正在读取：${sourceURL}\n")
+                            runOnUiThread {
+                                status.text = "状态：正在读取 IP 来源"
+                                resultsView.text = sourceLog.toString()
                             }
-                            val code = connection.responseCode
-                            if (code !in 200..299) throw java.io.IOException("HTTP 状态码：$code")
-                            val content = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                            val found = parseImported(content, false).first
-                            val geo = parseGeoMetadata(content, false)
-                            mergeGeoMetadata(runGeoRows, runCountryCodes, geo)
-                            val before = mergedIPs.size
-                            mergedIPs.addAll(found)
-                            sourceLog.append("该来源识别到 ${found.size} 个唯一 IPv4；新增 ${mergedIPs.size - before} 个\n")
-                        } catch (e: Exception) {
-                            sourceLog.append("读取失败，跳过此来源：${e.message ?: e.javaClass.simpleName}\n")
-                        } finally {
-                            connection?.disconnect()
+                            var connection: HttpURLConnection? = null
+                            try {
+                                connection = (URL(sourceURL).openConnection() as HttpURLConnection).apply {
+                                    connectTimeout = 15000
+                                    readTimeout = 60000
+                                    instanceFollowRedirects = true
+                                    setRequestProperty("User-Agent", "Mozilla/5.0")
+                                }
+                                val code = connection.responseCode
+                                if (code !in 200..299) throw java.io.IOException("HTTP 状态码：$code")
+                                val content = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                                val found = parseImported(content, false).first
+                                val geo = parseGeoMetadata(content, false)
+                                mergeGeoMetadata(runGeoRows, runCountryCodes, geo)
+                                val before = mergedIPs.size
+                                mergedIPs.addAll(found)
+                                sourceLog.append("该来源识别到 ${found.size} 个唯一 IPv4；新增 ${mergedIPs.size - before} 个\n")
+                            } catch (e: Exception) {
+                                sourceLog.append("读取失败，跳过此来源：${e.message ?: e.javaClass.simpleName}\n")
+                            } finally {
+                                connection?.disconnect()
+                            }
                         }
+                    } else {
+                        sourceLog.append("网络来源：未启用\n")
                     }
-                } else {
-                    sourceLog.append("网络来源：未启用\n")
-                }
+    
+    
                 }
 
                 if (mergedIPs.isEmpty()) {
@@ -1567,7 +1589,7 @@ open class MainActivity : Activity() {
                     status.text = "状态：即将测速，共 ${finalIPs.size} 个唯一 IP"
                     resultsView.text = sourceLog.toString()
                 }
-                val p = ProcessBuilder(args).directory(filesDir).redirectErrorStream(true).start()
+                val p = ProcessBuilder(args).directory(workDir).redirectErrorStream(true).start()
                 process = p
                 runOnUiThread { status.text = "状态：测速进行中" }
                 val all = StringBuilder()
