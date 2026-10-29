@@ -171,6 +171,17 @@ open class MainActivity : Activity() {
 
     private var savedDataLoaded = false
 
+    private data class MainPageSnapshot(
+        val statusText: String,
+        val resultText: String,
+        val resultTextSize: Float,
+        val dataCenterSummaryText: String,
+        val showingOfficialDataCenters: Boolean,
+        val scrollY: Int
+    )
+
+    private var mainPageSnapshot: MainPageSnapshot? = null
+
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
         if (ev.action == android.view.MotionEvent.ACTION_DOWN) {
             val focused = currentFocus
@@ -390,6 +401,16 @@ open class MainActivity : Activity() {
     }
 
     private fun showGitHubSettings() {
+        if (::status.isInitialized && ::resultsView.isInitialized && ::dataCenterSummaryView.isInitialized) {
+            mainPageSnapshot = MainPageSnapshot(
+                statusText = status.text.toString(),
+                resultText = resultsView.text.toString(),
+                resultTextSize = resultsView.textSize,
+                dataCenterSummaryText = dataCenterSummaryView.text.toString(),
+                showingOfficialDataCenters = isOfficialMode && officialDataCenterScroll?.visibility == View.VISIBLE,
+                scrollY = (root.parent as? ScrollView)?.scrollY ?: 0
+            )
+        }
         sourcePage = false
         githubPage = true
         makeRoot()
@@ -1079,6 +1100,28 @@ open class MainActivity : Activity() {
             }
             override fun afterTextChanged(s: android.text.Editable?) {}
         })
+        restoreMainPageSnapshot()
+    }
+
+    private fun restoreMainPageSnapshot() {
+        val snapshot = mainPageSnapshot ?: return
+        status.text = snapshot.statusText
+        resultsView.textSize = snapshot.resultTextSize
+        resultsView.text = snapshot.resultText
+        dataCenterSummaryView.text = snapshot.dataCenterSummaryText
+
+        if (isOfficialMode) {
+            renderOfficialDataCenterRows()
+            if (snapshot.showingOfficialDataCenters) {
+                showOfficialDataCenterList()
+            } else {
+                showOfficialSpeedResults()
+            }
+        }
+
+        val scrollY = snapshot.scrollY
+        root.post { (root.parent as? ScrollView)?.scrollTo(0, scrollY) }
+        mainPageSnapshot = null
     }
 
     private fun showSources() {
