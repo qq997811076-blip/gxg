@@ -173,7 +173,7 @@ open class MainActivity : Activity() {
 
     private data class MainPageSnapshot(
         val statusText: String,
-        val resultText: String,
+        val resultText: CharSequence,
         val resultTextSize: Float,
         val dataCenterSummaryText: String,
         val showingOfficialDataCenters: Boolean,
@@ -404,7 +404,7 @@ open class MainActivity : Activity() {
         if (::status.isInitialized && ::resultsView.isInitialized && ::dataCenterSummaryView.isInitialized) {
             mainPageSnapshot = MainPageSnapshot(
                 statusText = status.text.toString(),
-                resultText = resultsView.text.toString(),
+                resultText = resultsView.text,
                 resultTextSize = resultsView.textSize,
                 dataCenterSummaryText = dataCenterSummaryView.text.toString(),
                 showingOfficialDataCenters = isOfficialMode && officialDataCenterScroll?.visibility == View.VISIBLE,
