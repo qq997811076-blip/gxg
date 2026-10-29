@@ -89,7 +89,13 @@ open class MainActivity : Activity() {
     private lateinit var root: LinearLayout
     private lateinit var status: TextView
     private lateinit var resultsView: TextView
-    private lateinit var dataCenterSummaryView: TextView
+    private lateinit var dataCenterSummaryView: LinearLayout
+    private var officialRawByDataCenter: Map<String, List<String>> = emptyMap()
+    private var officialIPsByDataCenter: Map<String, List<String>> = emptyMap()
+    private var officialCoreArgs: List<String> = emptyList()
+    private var officialWorkingDir: File? = null
+    private var officialIPFile: File? = null
+    private var officialThresholdValue: Double = 0.5
     private lateinit var targetInput: EditText
     private lateinit var targetPresetSpinner: Spinner
     private var updatingTargetPreset = false
@@ -679,8 +685,11 @@ open class MainActivity : Activity() {
         resultsView.setBackgroundColor(0xFFF1F3F4.toInt())
         root.addView(resultsView, LinearLayout.LayoutParams(-1, dp(320)))
         root.addView(label("数据中心汇总", 16f))
-        dataCenterSummaryView = label("暂无数据中心统计", 13f)
-        dataCenterSummaryView.setPadding(dp(12), dp(8), dp(12), dp(8))
+        dataCenterSummaryView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        dataCenterSummaryView.addView(label("暂无数据中心统计", 13f))
         root.addView(dataCenterSummaryView)
 
 
@@ -1522,6 +1531,15 @@ open class MainActivity : Activity() {
         val args = mutableListOf(
             binary.absolutePath, target, connectN.toString(), downloadN.toString(), topN.toString(), "no", downloadCapBytes.toString()
         )
+        if (isOfficialMode) {
+            officialCoreArgs = args.toList()
+            officialWorkingDir = workingDir
+            officialIPFile = ipFile
+            officialThresholdValue = threshold
+            officialRawByDataCenter = emptyMap()
+            officialIPsByDataCenter = emptyMap()
+            renderOfficialDataCenterSummary()
+        }
         resultLines = emptyList()
         resultsView.text = "正在准备测速…"
         status.text = "状态：正在启动"
@@ -1659,7 +1677,7 @@ open class MainActivity : Activity() {
                     val speed = baseLine.substringAfter("#").removeSuffix("M")
                     val colo = fields.getOrNull(1).orEmpty().ifBlank { "UNK" }
                     val sourceLocation = fields.getOrNull(3).orEmpty().ifBlank { "XX" }
-                    "$ip:443#$colo-$sourceLocation-${speed}MB/s"
+                    if (isOfficialMode) "$ip:443#官方优选-${speed}MB/s" else "$ip:443#$colo-$sourceLocation-${speed}MB/s"
                 }
                 val dcStats = parsedRaw.map { raw ->
                     val fields = raw.split("|")
@@ -1681,11 +1699,28 @@ open class MainActivity : Activity() {
                         if (location.isNotBlank()) "；$location" else ""
                 }
                 resultLines = parsed
+                val qualifiedRawForSummary = parsedRaw.filterIndexed { index, _ ->
+                    parsed.getOrNull(index)?.let { resultSpeed(it) >= threshold } == true
+                }
+                if (isOfficialMode) {
+                    officialRawByDataCenter = qualifiedRawForSummary.mapNotNull { raw ->
+                        val colo = raw.split("|").getOrNull(1).orEmpty().ifBlank { "UNK" }
+                        if (colo == "UNK") null else colo to raw
+                    }.groupBy({ it.first }, { it.second })
+                    officialIPsByDataCenter = officialRawByDataCenter.mapValues { (_, rows) ->
+                        rows.mapNotNull { it.substringBefore("|").substringBefore("#").takeIf(String::isNotBlank) }.distinct()
+                    }
+                }
                 val outputText = sourceLog.toString() + all.toString().trim()
                 runOnUiThread {
                     process = null
                     val visible = filterResults(parsed, threshold)
-                    dataCenterSummaryView.text = if (dcSummary.isEmpty()) "暂无可识别的数据中心；请检查网络或映射数据" else dcSummary.joinToString("\n")
+                    if (isOfficialMode) {
+                        renderOfficialDataCenterSummary()
+                    } else {
+                        dataCenterSummaryView.removeAllViews()
+                        dataCenterSummaryView.addView(label(if (dcSummary.isEmpty()) "暂无可识别的数据中心；请检查网络或映射数据" else dcSummary.joinToString("\n"), 13f))
+                    }
                     if (exitCode != 0 || parsed.isEmpty()) {
                         resultsView.text = outputText.takeLast(6000).ifBlank {
                             "测速程序没有输出日志。请检查 IP 来源设置和测速地址。"
@@ -1716,8 +1751,94 @@ open class MainActivity : Activity() {
         }
     }
 
+
+    private fun renderOfficialDataCenterSummary() {
+        if (!::dataCenterSummaryView.isInitialized) return
+        dataCenterSummaryView.removeAllViews()
+        if (officialRawByDataCenter.isEmpty()) {
+            dataCenterSummaryView.addView(label("暂无合格数据中心", 13f))
+            return
+        }
+        officialRawByDataCenter.toSortedMap().forEach { (colo, rows) ->
+            val latencies = rows.mapNotNull { it.split("|").getOrNull(4)?.toLongOrNull() }
+                .filter { it >= 0L }
+            val minLatency = latencies.minOrNull()?.let { "${it} ms" } ?: "未知"
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(2), dp(2), dp(2), dp(2))
+            }
+            val count = rows.map { it.substringBefore("|").substringBefore("#") }.distinct().size
+            val info = label("$colo  合格IP：${count}  最低延迟：${minLatency}", 13f).apply {
+                setPadding(0, dp(6), dp(4), dp(6))
+                maxLines = 2
+            }
+            row.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
+            row.addView(button("开始测速") { startOfficialDataCenterRetest(colo) }, LinearLayout.LayoutParams(-2, -2))
+            dataCenterSummaryView.addView(row, LinearLayout.LayoutParams(-1, -2))
+        }
+    }
+
+    private fun startOfficialDataCenterRetest(colo: String) {
+        if (!isOfficialMode) return
+        if (process != null) {
+            Toast.makeText(this, "当前已有测速任务运行，请等待结束", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val ips = officialIPsByDataCenter[colo].orEmpty().distinct()
+        val workDir = officialWorkingDir
+        val ipFile = officialIPFile
+        if (ips.isEmpty() || workDir == null || ipFile == null || officialCoreArgs.isEmpty()) {
+            Toast.makeText(this, "该数据中心没有可复测的合格 IP，请先完成官方优选", Toast.LENGTH_LONG).show()
+            return
+        }
+        executor.execute {
+            try {
+                ipFile.writeText(ips.joinToString("\n") + "\n", Charsets.UTF_8)
+                runOnUiThread {
+                    status.text = "状态：正在复测 $colo，共 ${ips.size} 个 IP"
+                    resultsView.text = "正在对 $colo 的 ${ips.size} 个初筛合格 IP 进行二次测速…"
+                }
+                val p = ProcessBuilder(officialCoreArgs).directory(workDir).redirectErrorStream(true).start()
+                process = p
+                val output = StringBuilder()
+                p.inputStream.bufferedReader().useLines { lines -> lines.forEach { output.append(it).append('\n') } }
+                val exitCode = p.waitFor()
+                val raw = output.toString().lineSequence().map { it.trim() }.filter { line ->
+                    Regex("^[0-9]{1,3}(?:\\.[0-9]{1,3}){3}#[0-9]+(?:\\.[0-9]+)?M$").matches(line.substringBefore("|")) && line.contains("|")
+                }.toList()
+                val formatted = raw.map { line ->
+                    val base = line.substringBefore("|")
+                    val ip = base.substringBefore("#")
+                    val speed = base.substringAfter("#").removeSuffix("M")
+                    "$ip:443#官方优选-${speed}MB/s"
+                }
+                val passedRaw = raw.filterIndexed { index, _ -> formatted.getOrNull(index)?.let { resultSpeed(it) >= officialThresholdValue } == true }
+                val passedIPs = passedRaw.mapNotNull { it.substringBefore("|").substringBefore("#").takeIf(String::isNotBlank) }.distinct()
+                officialRawByDataCenter = officialRawByDataCenter.toMutableMap().apply { put(colo, passedRaw) }
+                officialIPsByDataCenter = officialRawByDataCenter.mapValues { (_, values) ->
+                    values.mapNotNull { it.substringBefore("|").substringBefore("#").takeIf(String::isNotBlank) }.distinct()
+                }
+                resultLines = formatted.filterIndexed { index, _ -> raw.getOrNull(index)?.let { it in passedRaw } == true }
+                val visible = filterResults(resultLines, officialThresholdValue)
+                runOnUiThread {
+                    process = null
+                    renderOfficialDataCenterSummary()
+                    resultsView.text = if (visible.isEmpty()) "$colo 二次测速没有合格 IP" else "$colo 二次测速合格结果（${visible.size} 个）\n" + visible.joinToString("\n")
+                    status.text = if (exitCode == 0) "状态：$colo 二次测速完成；合格 ${passedIPs.size} 个" else "状态：$colo 二次测速结束，程序退出代码 $exitCode；合格 ${passedIPs.size} 个"
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    process = null
+                    status.text = "状态：$colo 二次测速失败"
+                    resultsView.text = "二次测速失败：${e.message ?: e.javaClass.simpleName}"
+                }
+            }
+        }
+    }
+
     private fun resultSpeed(line: String): Double {
-        val formatted = Regex("#[A-Z]{3}-[A-Z]{2}-([0-9]+(?:\\.[0-9]+)?)MB/s$").find(line)
+        val formatted = Regex("#(?:[A-Z]{3}-[A-Z]{2}-|官方优选-)?([0-9]+(?:\\.[0-9]+)?)MB/s$").find(line)
         if (formatted != null) return formatted.groupValues[1].toDoubleOrNull() ?: 0.0
         return line.substringAfter("#").substringBefore("M").toDoubleOrNull() ?: 0.0
     }
