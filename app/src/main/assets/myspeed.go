@@ -25,7 +25,7 @@ const (
 	readBufferSize         = 32 * 1024
 	minDownloadBytes int64 = 64 * 1024
 	minMeasureTime         = 100 * time.Millisecond
-	minSpeed               = 0.5
+	minSpeed               = 0.1
 	connectTimeout         = 5 * time.Second
 	sourceTimeout          = 60 * time.Second
 )
@@ -47,10 +47,7 @@ var (
 	locationsByIATA map[string]locationInfo
 	coloPattern = regexp.MustCompile(`(?m)^colo=([A-Z]{3})\r?$`)
 	locPattern  = regexp.MustCompile(`(?m)^loc=([A-Z]{2})\r?$`)
-	sourceURLs = []string{
-		"https://zip.cm.edu.kg/all.txt",
-		"https://countrymerge.pages.dev/all.txt",
-	}
+	sourceURLs = []string{}
 
 	ipv4Pattern = regexp.MustCompile(
 		`[0-9]{1,3}(?:\.[0-9]{1,3}){3}`,
@@ -670,7 +667,7 @@ func main() {
 	fmt.Println("单 IP 最长测速时间：10 秒")
 	fmt.Println("单 IP 无数据超时：3 秒")
 	fmt.Println("最低有效下载量：64 KiB")
-	fmt.Println("最低打印速度：0.5M")
+	fmt.Println("最低打印速度：0.1M")
 
 	var connected []Result
 	if speedOnly {
@@ -798,7 +795,7 @@ func main() {
 	fmt.Print("\r\033[K\n")
 	progressMu.Unlock()
 
-	// 保留原来的 0.5 MiB/s 过滤规则。
+	// 最低显示速度过滤下限：0.1 MiB/s。
 	filtered := make([]Result, 0, len(results))
 	for _, r := range results {
 		if r.Speed >= minSpeed {
@@ -817,12 +814,12 @@ func main() {
 	fmt.Printf("HTTPS 不通：%d\n", len(ips)-len(connected))
 	fmt.Printf("参与下载测速：%d\n", len(selected))
 	fmt.Printf("下载测速成功且速度大于 0：%d\n", len(results))
-	fmt.Printf("达到 0.5M 打印标准：%d\n", len(filtered))
+	fmt.Printf("达到 0.1M 打印标准：%d\n", len(filtered))
 	fmt.Printf("下载测速失败：%d\n", failed.Load())
 
 	fmt.Println("\n========== 最终 IP（速度从低到高） ==========")
 	if len(filtered) == 0 {
-		fmt.Println("没有达到 0.5M 的有效 IP")
+		fmt.Println("没有达到 0.1M 的有效 IP")
 		return
 	}
 

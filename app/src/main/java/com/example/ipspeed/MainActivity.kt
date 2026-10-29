@@ -40,6 +40,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -66,7 +67,12 @@ open class MainActivity : Activity() {
     private val sharedUploadPrefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
     protected open val isOfficialMode: Boolean = false
     private val executor = Executors.newSingleThreadExecutor()
-    private var process: Process? = null
+    private val testLock = Any()
+    @Volatile private var process: Process? = null
+    @Volatile private var testGeneration: Long = 0L
+    @Volatile private var testActive = false
+    private var testFuture: Future<*>? = null
+    @Volatile private var activeSourceConnection: HttpURLConnection? = null
     private var importedIPs: List<String> = emptyList()
     private var resultLines: List<String> = emptyList()
     private var sourcePage = false
@@ -141,10 +147,20 @@ open class MainActivity : Activity() {
     private lateinit var officialAutoSpeedCheck: CheckBox
     private lateinit var officialDataCenterInput: EditText
 
-    private val defaults = listOf(
+    private val legacyBuiltInSourceURLs = setOf(
         "https://zip.cm.edu.kg/all.txt",
         "https://countrymerge.pages.dev/all.txt"
     )
+
+    private fun savedNetworkURLs(): String {
+        val saved = prefs.getString("urls", "").orEmpty()
+        val filtered = saved.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it !in legacyBuiltInSourceURLs }
+            .joinToString("\n")
+        if (filtered != saved) prefs.edit().putString("urls", filtered).commit()
+        return filtered
+    }
 
     private val targetPresetLabels = arrayOf("自动选择", "Cloudflare", "CM提供", "移动专属", "手动输入")
     private val autoTargetLabel = "自动选择"
@@ -744,7 +760,7 @@ open class MainActivity : Activity() {
             }
             dataCenterRow.addView(label("数据中心", 16f).apply {
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(4), dp(4), dp(4))
+                setPadding(0, dp(4), 0, dp(4))
             }, LinearLayout.LayoutParams(-2, -2))
             officialDataCenterInput = edit(
                 "留空则选择最低延迟",
@@ -824,10 +840,7 @@ open class MainActivity : Activity() {
         root.addView(resultsFrame, LinearLayout.LayoutParams(-1, dp(320)))
         dataCenterSummaryView = label("暂无数据中心统计", 13f)
         dataCenterSummaryView.setPadding(dp(12), dp(8), dp(12), dp(8))
-        if (!isOfficialMode) {
-            root.addView(label("数据中心汇总", 16f))
-            root.addView(dataCenterSummaryView)
-        }
+        // Keep summary data internally, but do not render a data-center summary below the gray results box.
 
 
         val parameterHeaderRow = LinearLayout(this).apply {
@@ -894,7 +907,6 @@ open class MainActivity : Activity() {
         }
         targetRow.addView(targetPresetSpinner, LinearLayout.LayoutParams(0, -2, 1.15f).apply { marginEnd = dp(5) })
         targetRow.addView(targetInput, LinearLayout.LayoutParams(0, -2, 2f).apply { marginEnd = dp(5) })
-        targetRow.addView(button("↺") { resetTargetPreset() }, LinearLayout.LayoutParams(dp(48), -2))
         root.addView(targetRow, LinearLayout.LayoutParams(-1, -2))
         targetPresetSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
@@ -982,7 +994,7 @@ open class MainActivity : Activity() {
             root.addView(localCheck)
             root.addView(networkCheck)
             root.addView(label("网络 URL（每行一个，编辑后自动保存）", 14f))
-            urlsInput = edit("每行一个 HTTPS URL", prefs.getString("urls", defaults.joinToString("\\n"))!!, false)
+            urlsInput = edit("每行一个 HTTPS URL", savedNetworkURLs(), false)
             root.addView(urlsInput, LinearLayout.LayoutParams(-1, dp(140)))
             urlsInput.addTextChangedListener(object : android.text.TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -1116,7 +1128,7 @@ open class MainActivity : Activity() {
 
         root.addView(label("三、网络 URL 列表", 18f))
         root.addView(label("每行一个 URL，可直接编辑、添加或删除。编辑时自动保存。", 13f))
-        urlsInput = edit("每行一个 HTTPS URL", prefs.getString("urls", defaults.joinToString("\\n"))!!, false)
+        urlsInput = edit("每行一个 HTTPS URL", savedNetworkURLs(), false)
         root.addView(urlsInput, LinearLayout.LayoutParams(-1, dp(190)))
         urlsInput.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -1592,12 +1604,15 @@ open class MainActivity : Activity() {
         }
     }
 
+    private fun isTestCancelled(generation: Long): Boolean =
+        generation != testGeneration || Thread.currentThread().isInterrupted
+
     private fun startTest(connectivityOnly: Boolean = false, selectedIPs: List<String>? = null) {
         if (!savedDataLoaded) {
             Toast.makeText(this, "本地 IP 数据仍在加载，请稍候", Toast.LENGTH_SHORT).show()
             return
         }
-        if (process != null) {
+        if (testActive || process != null) {
             Toast.makeText(this, "测速正在运行", Toast.LENGTH_SHORT).show()
             return
         }
@@ -1621,8 +1636,8 @@ open class MainActivity : Activity() {
         val threshold = thresholdInput.text.toString().trim().toDoubleOrNull()
         if (!target.startsWith("https://") || connectN == null || connectN <= 0 ||
             downloadN == null || downloadN <= 0 || topN == null || topN <= 0 ||
-            threshold == null || threshold < 0.5) {
-            Toast.makeText(this, "请检查参数；最低显示速度不能低于核心固定的 0.5 MiB/s", Toast.LENGTH_LONG).show()
+            threshold == null || threshold < 0.1) {
+            Toast.makeText(this, "请检查参数；最低显示速度不能低于 0.1 MiB/s", Toast.LENGTH_LONG).show()
             return
         }
 
@@ -1650,7 +1665,7 @@ open class MainActivity : Activity() {
                 ""
             }
         } else ""
-        val urls = prefs.getString("urls", defaults.joinToString("\n"))!!
+        val urls = savedNetworkURLs()
             .lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
         if (!isOfficialMode && !localEnabled && !networkEnabled) {
             Toast.makeText(this, "请至少启用一个 IP 来源", Toast.LENGTH_LONG).show()
@@ -1678,6 +1693,8 @@ open class MainActivity : Activity() {
             Toast.makeText(this, "另一个优选页面的任务尚未完成，请等待任务结束", Toast.LENGTH_LONG).show()
             return
         }
+        testActive = true
+        val generation = ++testGeneration
 
         // 按指定数据中心测速时，所有合格 IP 都参与；普通模式仍使用原来的低延迟数量参数。
         val effectiveTopN = topN
@@ -1694,7 +1711,7 @@ open class MainActivity : Activity() {
         process = null
         val savedGeoRows = geoRowsByIP.toMap()
         val savedCountryCodes = countryCodesByIP.toMap()
-        executor.execute {
+        testFuture = executor.submit {
             val sourceLog = StringBuilder()
             val runGeoRows = linkedMapOf<String, String>()
             val runCountryCodes = linkedMapOf<String, String>()
@@ -1747,8 +1764,10 @@ open class MainActivity : Activity() {
 
                     if (networkEnabled) {
                         for (sourceURL in urls) {
+                            if (isTestCancelled(generation)) return@submit
                             sourceLog.append("正在读取：${sourceURL}\n")
                             runOnUiThread {
+                            if (generation != testGeneration) return@runOnUiThread
                                 status.text = "状态：正在读取 IP 来源"
                                 resultsView.text = sourceLog.toString()
                             }
@@ -1760,6 +1779,7 @@ open class MainActivity : Activity() {
                                     instanceFollowRedirects = true
                                     setRequestProperty("User-Agent", "Mozilla/5.0")
                                 }
+                                activeSourceConnection = connection
                                 val code = connection.responseCode
                                 if (code !in 200..299) throw java.io.IOException("HTTP 状态码：$code")
                                 val content = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
@@ -1773,6 +1793,7 @@ open class MainActivity : Activity() {
                                 sourceLog.append("读取失败，跳过此来源：${e.message ?: e.javaClass.simpleName}\n")
                             } finally {
                                 connection?.disconnect()
+                                if (activeSourceConnection === connection) activeSourceConnection = null
                             }
                         }
                     } else {
@@ -1782,15 +1803,18 @@ open class MainActivity : Activity() {
 
                 }
 
+                if (isTestCancelled(generation)) return@submit
                 if (mergedIPs.isEmpty()) {
                     runOnUiThread {
+                            if (generation != testGeneration) return@runOnUiThread
                         process = null
                         resultsView.text = sourceLog.toString() + "读取 IP 来源失败：所有来源均未取得有效 IPv4"
                         status.text = "状态：IP 来源读取失败"
                     }
-                    return@execute
+                    return@submit
                 }
 
+                if (isTestCancelled(generation)) return@submit
                 // 写入前最后一次规范化去重；Go 核心读取的就是这份文件。
                 val finalIPs = parseImported(mergedIPs.joinToString("\n"), false).first
                 ipFile.writeText(finalIPs.joinToString("\n") + "\n")
@@ -1812,22 +1836,28 @@ open class MainActivity : Activity() {
                 sourceLog.append("全部来源合并去重后：${finalIPs.size} 个唯一 IPv4\n")
                 sourceLog.append("最终写入 ips.txt、交给测速核心：${finalIPs.size} 个 IP\n\n")
                 runOnUiThread {
+                            if (generation != testGeneration) return@runOnUiThread
                     status.text = "状态：即将测速，共 ${finalIPs.size} 个唯一 IP"
                     resultsView.text = sourceLog.toString()
                 }
-                val p = ProcessBuilder(args).directory(workingDir).redirectErrorStream(true).start()
-                process = p
-                runOnUiThread { status.text = "状态：测速进行中" }
+                val p = synchronized(testLock) {
+                    if (isTestCancelled(generation)) return@submit
+                    ProcessBuilder(args).directory(workingDir).redirectErrorStream(true).start().also { process = it }
+                }
+                runOnUiThread {
+                            if (generation != testGeneration) return@runOnUiThread status.text = "状态：测速进行中" }
                 val all = StringBuilder()
                 p.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { line ->
                         all.append(line).append('\n')
                         runOnUiThread {
+                            if (generation != testGeneration) return@runOnUiThread
                             status.text = "状态：测速进行中\n${line.takeLast(160)}"
                         }
                     }
                 }
                 val exitCode = p.waitFor()
+                if (isTestCancelled(generation)) return@submit
                 if (connectivityOnly) {
                     val candidates = all.toString().lineSequence()
                         .map { it.trim() }
@@ -1849,6 +1879,7 @@ open class MainActivity : Activity() {
                         .distinctBy { it.ip }
                         .toList()
                     runOnUiThread {
+                            if (generation != testGeneration) return@runOnUiThread
                         process = null
                         if (exitCode != 0) {
                             showOfficialSpeedResults()
@@ -1869,7 +1900,7 @@ open class MainActivity : Activity() {
                             runAutomaticOfficialSpeedTestIfEnabled()
                         }
                     }
-                    return@execute
+                    return@submit
                 }
                 val parsedRaw = all.toString().lineSequence()
                     .map { it.trim() }
@@ -1915,6 +1946,7 @@ open class MainActivity : Activity() {
                 resultLines = parsed
                 val outputText = sourceLog.toString() + all.toString().trim()
                 runOnUiThread {
+                            if (generation != testGeneration) return@runOnUiThread
                     process = null
                     val visible = filterResults(parsed, threshold)
                     dataCenterSummaryView.text = if (dcSummary.isEmpty()) "暂无可识别的数据中心；请检查网络或映射数据" else dcSummary.joinToString("\n")
@@ -1947,11 +1979,17 @@ open class MainActivity : Activity() {
                 }
             } catch (e: Exception) {
                 runOnUiThread {
+                            if (generation != testGeneration) return@runOnUiThread
                     process = null
                     status.text = "状态：启动失败"
                     resultsView.text = e.toString()
                 }
             } finally {
+                if (generation == testGeneration) {
+                    testActive = false
+                    process = null
+                    testFuture = null
+                }
                 releaseTestTask(this@MainActivity)
             }
         }
@@ -2111,14 +2149,19 @@ open class MainActivity : Activity() {
             .sortedByDescending { resultSpeed(it) }
 
     private fun stopTest() {
-        val p = process
-        if (p == null) {
-            status.text = "状态：当前没有运行中的测速任务"
-            return
+        val hadTask = testActive || process != null || testFuture?.isDone == false
+        synchronized(testLock) {
+            testGeneration += 1
+            testFuture?.cancel(true)
+            testFuture = null
+            activeSourceConnection?.disconnect()
+            activeSourceConnection = null
+            process?.destroyForcibly()
+            process = null
+            testActive = false
+            releaseTestTask(this)
         }
-        p.destroy()
-        process = null
-        status.text = "状态：已请求停止"
+        status.text = if (hadTask) "状态：已停止全部任务" else "状态：当前没有运行中的测速任务"
     }
 
     private fun copyResults() {
