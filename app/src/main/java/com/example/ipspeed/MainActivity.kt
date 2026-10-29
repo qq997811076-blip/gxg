@@ -847,17 +847,15 @@ open class MainActivity : Activity() {
                 setPadding(0, dp(4), dp(2), dp(4))
             }, LinearLayout.LayoutParams(-2, -2))
             speedOption.addView(officialAutoSpeedCheck, LinearLayout.LayoutParams(-2, -2))
-            optionRow.addView(speedOption, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
+            optionRow.addView(speedOption, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) })
 
             val dataCenterRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                // Shift the complete label/input group left by three 16sp text sizes.
-                translationX = -dp(48).toFloat()
             }
             dataCenterRow.addView(label("数据中心", 16f).apply {
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(4), 0, dp(4))
+                setPadding(0, dp(4), dp(4), dp(4))
             }, LinearLayout.LayoutParams(-2, -2))
             officialDataCenterInput = edit(
                 "留空则选择最低延迟",
@@ -874,7 +872,7 @@ open class MainActivity : Activity() {
                 })
             }
             dataCenterRow.addView(officialDataCenterInput, LinearLayout.LayoutParams(0, -2, 1f))
-            optionRow.addView(dataCenterRow, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6) })
+            optionRow.addView(dataCenterRow, LinearLayout.LayoutParams(0, -2, 1f))
             root.addView(optionRow, LinearLayout.LayoutParams(-1, -2))
         }
 
@@ -1190,6 +1188,10 @@ open class MainActivity : Activity() {
         dataCenterSummaryView.text = snapshot.dataCenterSummaryText
 
         if (isOfficialMode) {
+            // Restored result text retains its ClickableSpan, but a newly created
+            // TextView must also restore the movement method that dispatches taps.
+            resultsView.movementMethod = LinkMovementMethod.getInstance()
+            resultsView.highlightColor = Color.TRANSPARENT
             renderOfficialDataCenterRows()
             if (snapshot.showingOfficialDataCenters) {
                 showOfficialDataCenterList()
