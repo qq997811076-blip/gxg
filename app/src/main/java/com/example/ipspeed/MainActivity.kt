@@ -41,9 +41,9 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 open class MainActivity : Activity() {
-    protected open val prefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
+    protected open val prefs get() = getSharedPreferences(if (isOfficialMode) "settings_official" else "settings", MODE_PRIVATE)
     private val sharedUploadPrefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
-    protected open val isOfficialMode: Boolean = false
+    protected open var isOfficialMode: Boolean = false
     private val executor = Executors.newSingleThreadExecutor()
     private var process: Process? = null
     private var importedIPs: List<String> = emptyList()
@@ -642,11 +642,15 @@ open class MainActivity : Activity() {
         }
         titleRow.addView(label("IP 测速", 26f), LinearLayout.LayoutParams(0, -2, 1f))
         titleRow.addView(tabButton("个性优选", selected = !isOfficialMode) {
-            if (isOfficialMode) finish()
+            if (isOfficialMode) {
+                isOfficialMode = false
+                showMain()
+            }
         }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(2) })
         titleRow.addView(tabButton("官方优选", selected = isOfficialMode) {
             if (!isOfficialMode) {
-                startActivity(Intent(this, OfficialActivity::class.java))
+                isOfficialMode = true
+                showMain()
             }
         }, LinearLayout.LayoutParams(-2, -2))
         root.addView(titleRow, LinearLayout.LayoutParams(-1, -2))
