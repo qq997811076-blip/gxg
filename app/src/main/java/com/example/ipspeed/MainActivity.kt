@@ -42,6 +42,7 @@ import javax.crypto.spec.GCMParameterSpec
 
 open class MainActivity : Activity() {
     protected open val prefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
+    private val sharedUploadPrefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
     protected open val isOfficialMode: Boolean = false
     private val executor = Executors.newSingleThreadExecutor()
     private var process: Process? = null
@@ -287,11 +288,11 @@ open class MainActivity : Activity() {
         repository = prefs.getString("github_repository", "").orEmpty(),
         branch = prefs.getString("github_branch", "").orEmpty(),
         path = prefs.getString("github_path", "").orEmpty(),
-        mode = prefs.getString("github_mode", "").orEmpty()
+        mode = sharedUploadPrefs.getString("github_mode", "").orEmpty()
     )
 
     private fun updateGitHubStatusViews() {
-        githubAutoStatusView?.text = if (prefs.getBoolean("github_auto_upload", false)) "已启用" else "已关闭"
+        githubAutoStatusView?.text = if (sharedUploadPrefs.getBoolean("github_auto_upload", false)) "已启用" else "已关闭"
         githubConnectionStatusView?.text = prefs.getString("github_status", "未检测") ?: "未检测"
         githubLastUploadTimeView?.text = prefs.getString("github_last_upload_time", "--") ?: "--"
         githubLastUploadCountView?.text = prefs.getString("github_last_upload_count", "--") ?: "--"
@@ -311,7 +312,7 @@ open class MainActivity : Activity() {
     }
 
     private fun setAutoUploadEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean("github_auto_upload", enabled).commit()
+        sharedUploadPrefs.edit().putBoolean("github_auto_upload", enabled).commit()
         Toast.makeText(
             this,
             if (enabled) "已启用测速完成后自动上传" else "已关闭自动上传",
@@ -842,14 +843,14 @@ open class MainActivity : Activity() {
         val append = RadioButton(this).apply { id = 1002; text = "追加上传" }
         githubModeGroup.addView(overwrite)
         githubModeGroup.addView(append)
-        when (prefs.getString("github_mode", "").orEmpty()) {
+        when (sharedUploadPrefs.getString("github_mode", "").orEmpty()) {
             "overwrite" -> githubModeGroup.check(1001)
             "append" -> githubModeGroup.check(1002)
             else -> githubModeGroup.clearCheck()
         }
         githubModeGroup.setOnCheckedChangeListener { _, checkedId ->
             val mode = when (checkedId) { 1001 -> "overwrite"; 1002 -> "append"; else -> "" }
-            prefs.edit().putString("github_mode", mode).commit()
+            sharedUploadPrefs.edit().putString("github_mode", mode).commit()
         }
         root.addView(githubModeGroup)
         val uploadActions = LinearLayout(this).apply {
@@ -861,13 +862,13 @@ open class MainActivity : Activity() {
             if (config.token.isBlank() || config.username.isBlank() || config.repository.isBlank() || config.branch.isBlank() || config.path.isBlank()) {
                 Toast.makeText(this, "请先填写 GitHub 账号与仓库设置", Toast.LENGTH_LONG).show()
                 showGitHubSettings()
-            } else if (prefs.getString("github_mode", "").orEmpty().isBlank()) {
+            } else if (sharedUploadPrefs.getString("github_mode", "").orEmpty().isBlank()) {
                 Toast.makeText(this, "请先选择覆盖上传或追加上传", Toast.LENGTH_LONG).show()
             } else startGitHubUpload(currentCopyText(), false)
         }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(6) })
         uploadActions.addView(android.widget.Switch(this).apply {
             text = "自动上传"
-            isChecked = prefs.getBoolean("github_auto_upload", false)
+            isChecked = sharedUploadPrefs.getBoolean("github_auto_upload", false)
             minWidth = 0
             minimumWidth = 0
             gravity = Gravity.CENTER
@@ -1685,7 +1686,7 @@ open class MainActivity : Activity() {
                         val saved = try { prefs.edit().putString("last_completed_result", snapshot).commit() } catch (_: Exception) { false }
                         if (!saved) Toast.makeText(this, "最近一次测速结果保存失败", Toast.LENGTH_LONG).show()
                         status.text = "状态：完成；结果 ${visible.size} 条"
-                        if (prefs.getBoolean("github_auto_upload", false) && snapshot.isNotBlank()) {
+                        if (sharedUploadPrefs.getBoolean("github_auto_upload", false) && snapshot.isNotBlank()) {
                             startGitHubUpload(snapshot, true)
                         }
                     }
