@@ -592,6 +592,14 @@ func main() {
 	downloadN, e2 := strconv.Atoi(os.Args[3])
 	topN, e3 := strconv.Atoi(os.Args[4])
 
+	connectivityOnly := false
+	for _, arg := range os.Args[5:] {
+		if arg == "--connectivity-only" {
+			connectivityOnly = true
+			break
+		}
+	}
+
 	customSourceMode := false
 	var customSourceURLs []string
 	sourceArgStart := 6
@@ -614,7 +622,11 @@ func main() {
 				sourceArgStart = 7
 			}
 		}
-		customSourceURLs = os.Args[sourceArgStart:]
+		for _, arg := range os.Args[sourceArgStart:] {
+			if arg != "--connectivity-only" {
+				customSourceURLs = append(customSourceURLs, arg)
+			}
+		}
 	}
 
 	if err := validateURL(target); err != nil {
@@ -662,6 +674,26 @@ func main() {
 
 	if len(connected) == 0 {
 		fmt.Println("没有连通的 IP，结束。")
+		return
+	}
+
+	// 官方优选首轮只做连通性检测；输出结构化结果供 Android 按数据中心汇总。
+	if connectivityOnly {
+		sort.Slice(connected, func(i, j int) bool {
+			if connected[i].DataCenter != connected[j].DataCenter {
+				return connected[i].DataCenter < connected[j].DataCenter
+			}
+			if connected[i].Latency == connected[j].Latency {
+				return connected[i].IP < connected[j].IP
+			}
+			return connected[i].Latency < connected[j].Latency
+		})
+		for _, r := range connected {
+			fmt.Printf("CONNECTED|%s|%s|%s|%s|%d|%s|%s\\n",
+				r.IP, r.DataCenter, r.CountryCode, r.SourceLocation,
+				r.Latency.Milliseconds(), r.Region, r.City)
+		}
+		fmt.Printf("连通性检测结束：%d 个 IP 合格；未启动下载测速。\\n", len(connected))
 		return
 	}
 
