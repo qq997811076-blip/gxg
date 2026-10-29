@@ -852,6 +852,8 @@ open class MainActivity : Activity() {
             val dataCenterRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
+                // Shift the complete label/input group left by three 16sp text sizes.
+                translationX = -dp(48).toFloat()
             }
             dataCenterRow.addView(label("数据中心", 16f).apply {
                 gravity = Gravity.CENTER_VERTICAL
@@ -1180,7 +1182,10 @@ open class MainActivity : Activity() {
     private fun restoreMainPageSnapshot() {
         val snapshot = mainPageSnapshot ?: return
         status.text = snapshot.statusText
-        resultsView.textSize = snapshot.resultTextSize
+        resultsView.setTextSize(
+            android.util.TypedValue.COMPLEX_UNIT_PX,
+            snapshot.resultTextSize
+        )
         resultsView.text = snapshot.resultText
         dataCenterSummaryView.text = snapshot.dataCenterSummaryText
 
