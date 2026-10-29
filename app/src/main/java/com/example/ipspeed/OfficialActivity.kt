@@ -6,5 +6,5 @@ package com.example.ipspeed
  */
 class OfficialActivity : MainActivity() {
     override val prefs by lazy { getSharedPreferences("settings_official", MODE_PRIVATE) }
-    override val isOfficialMode: Boolean = true
+    override var isOfficialMode: Boolean = true
 }
