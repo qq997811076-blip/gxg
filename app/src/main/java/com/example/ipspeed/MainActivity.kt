@@ -628,7 +628,7 @@ open class MainActivity : Activity() {
             }
         }, LinearLayout.LayoutParams(-2, -2))
         root.addView(titleRow, LinearLayout.LayoutParams(-1, -2))
-        root.addView(label("测速参数、IP 来源、上传方式集中管理", 13f))
+        root.addView(label(if (isOfficialMode) "官方优选测速与上传设置" else "测速参数、IP 来源、上传方式集中管理", 13f))
 
         root.addView(label("一、测速操作", 18f))
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -773,6 +773,7 @@ open class MainActivity : Activity() {
         filterRow.addView(thresholdBox, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(filterRow)
 
+        if (!isOfficialMode) {
         root.addView(label("四、IP 来源", 18f))
         root.addView(label("本地文件导入", 15f))
         val localImportRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -818,6 +819,8 @@ open class MainActivity : Activity() {
         })
         localCheck.setOnCheckedChangeListener { _, _ -> saveSourceSettings() }
         networkCheck.setOnCheckedChangeListener { _, _ -> saveSourceSettings() }
+        }
+
 
 
         root.addView(label("五、GitHub 上传", 18f))
