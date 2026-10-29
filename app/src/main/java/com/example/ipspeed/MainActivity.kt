@@ -1681,6 +1681,24 @@ open class MainActivity : Activity() {
                             }
                         }
                         .toList()
+                    // 保存首轮连通性合格 IP 及其数据中心/延迟元数据，手动测速时直接复用。
+                    val metadataFile = File(officialWorkingDir ?: File(filesDir, "official_work"), "official_connected.tsv")
+                    metadataFile.writeText(
+                        connectedRows.joinToString("\n") { row ->
+                            row.split("|").let { fields ->
+                                listOf(
+                                    fields.getOrNull(0).orEmpty().substringBefore("#"),
+                                    fields.getOrNull(1).orEmpty(),
+                                    fields.getOrNull(2).orEmpty(),
+                                    fields.getOrNull(3).orEmpty(),
+                                    fields.getOrNull(4).orEmpty(),
+                                    fields.getOrNull(5).orEmpty(),
+                                    fields.getOrNull(6).orEmpty()
+                                ).joinToString("\t") { it.replace("\t", " ").replace("\n", " ") }
+                            }
+                        } + if (connectedRows.isEmpty()) "" else "\n",
+                        Charsets.UTF_8
+                    )
                     officialRawByDataCenter = connectedRows
                         .groupBy { it.split("|").getOrNull(1).orEmpty().ifBlank { "UNK" } }
                     officialIPsByDataCenter = officialRawByDataCenter.mapValues { (_, rows) ->
@@ -1844,7 +1862,7 @@ open class MainActivity : Activity() {
                 }
                 val speedArgs = officialCoreArgs.toMutableList()
                 if (speedArgs.size > 4) speedArgs[4] = ips.size.toString()
-                val p = ProcessBuilder(speedArgs).directory(workDir).redirectErrorStream(true).start()
+                val p = ProcessBuilder(speedArgs + "--speed-only").directory(workDir).redirectErrorStream(true).start()
                 process = p
                 val output = StringBuilder()
                 p.inputStream.bufferedReader().useLines { lines -> lines.forEach { output.append(it).append('\n') } }
