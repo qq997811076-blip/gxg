@@ -708,22 +708,24 @@ open class MainActivity : Activity() {
         if (isOfficialMode) {
             officialAutoSpeedCheck = CheckBox(this).apply {
                 text = "自动测速"
+                textSize = 14f
                 isChecked = prefs.getBoolean("official_auto_speed_enabled", false)
                 setPadding(0, 0, 0, 0)
                 setOnCheckedChangeListener { _, checked ->
                     prefs.edit().putBoolean("official_auto_speed_enabled", checked).commit()
                 }
             }
-            startColumn.addView(officialAutoSpeedCheck, LinearLayout.LayoutParams(-1, -2))
         }
         val stopColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         stopColumn.addView(button("停止测速") { stopTest() }, LinearLayout.LayoutParams(-1, -2))
         if (isOfficialMode) {
+            stopColumn.addView(officialAutoSpeedCheck, LinearLayout.LayoutParams(-1, -2))
             val dataCenterRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
+                translationX = -dp(4)
             }
-            dataCenterRow.addView(label("数据中心", 13f).apply {
+            dataCenterRow.addView(label("数据中心", 14f).apply {
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(0, dp(4), dp(4), dp(4))
             }, LinearLayout.LayoutParams(-2, -2))
@@ -1911,13 +1913,11 @@ open class MainActivity : Activity() {
                         if (visible.isEmpty()) {
                             resultsView.textSize = 14f
                             resultsView.text = "没有达到显示标准的结果"
-                        } else if (isOfficialMode) {
-                            renderOfficialSpeedResults(visible.take(15))
                         } else {
-                            resultsView.text = visible.joinToString("\n")
+                            renderSpeedResults(visible.take(15))
                         }
-                        // Keep the complete filtered result set for copy, saved history, and upload;
-                        // only the official on-screen list is capped at 15 rows.
+                        // Keep all filtered results for copy, saved history, and upload;
+                        // only the on-screen list is capped at 15 rows.
                         val snapshot = visible.joinToString("\n")
                         val saved = try { prefs.edit().putString("last_completed_result", snapshot).commit() } catch (_: Exception) { false }
                         if (!saved) Toast.makeText(this, "最近一次测速结果保存失败", Toast.LENGTH_LONG).show()
@@ -2055,7 +2055,7 @@ open class MainActivity : Activity() {
         return line.substringAfter("#").substringBefore("M").toDoubleOrNull() ?: 0.0
     }
 
-    private fun renderOfficialSpeedResults(lines: List<String>) {
+    private fun renderSpeedResults(lines: List<String>) {
         resultsView.textSize = 16f
         val content = SpannableStringBuilder()
         lines.forEachIndexed { index, line ->
