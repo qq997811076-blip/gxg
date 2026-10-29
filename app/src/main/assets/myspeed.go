@@ -593,6 +593,7 @@ func main() {
 	topN, e3 := strconv.Atoi(os.Args[4])
 
 	customSourceMode := false
+	connectOnly := false
 	var customSourceURLs []string
 	sourceArgStart := 6
 
@@ -613,6 +614,10 @@ func main() {
 				downloadLimit = parsedLimit
 				sourceArgStart = 7
 			}
+		}
+		if len(os.Args) > 7 && os.Args[7] == "connect-only" {
+			connectOnly = true
+			sourceArgStart = 8
 		}
 		customSourceURLs = os.Args[sourceArgStart:]
 	}
@@ -662,6 +667,23 @@ func main() {
 
 	if len(connected) == 0 {
 		fmt.Println("没有连通的 IP，结束。")
+		return
+	}
+
+	if connectOnly {
+		fmt.Println("\n========== 连通性合格 IP（按数据中心） ==========")
+		for _, r := range connected {
+			colo := r.DataCenter
+			if colo == "" { colo = "UNK" }
+			country := r.CountryCode
+			if country == "" { country = "XX" }
+			location := r.SourceLocation
+			if location == "" { location = "XX" }
+			fmt.Printf("CONNECT|%s|%s|%s|%s|%.2f|%s|%s\\n",
+				r.IP, colo, country, location,
+				float64(r.Latency)/float64(time.Millisecond), r.Region, r.City)
+		}
+		fmt.Printf("\\n连通性测试完成：%d 个合格 IP；未执行下载测速。\\n", len(connected))
 		return
 	}
 
